@@ -1,0 +1,180 @@
+<?php
+include "../includes/db.php";
+include "../includes/auth.php";
+
+if($_SESSION['user']['role'] != 'admin'){
+    header("Location: ../login.php");
+    exit();
+}
+
+$user = $_SESSION['user'];
+$page = isset($_GET['page']) ? $_GET['page'] : 'home';
+
+// --- PSEUDO-CRON AUTOMATED DAILY AUDIT TRIGGER ---
+$today = date('Y-m-d');
+$auditFile = __DIR__ . "/last_audit.txt";
+$lastAudit = @file_get_contents($auditFile);
+if ($lastAudit !== $today) {
+    // Dynamically include and run the penalty auditor
+    include __DIR__ . "/cron_penalty_engine.php";
+    @file_put_contents($auditFile, $today);
+}
+?>
+<?php include "../includes/header.php"; ?>
+
+<style>
+    /* Styling for active dashboard navigation links */
+    .sidebar a.active-page {
+        background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
+        color: var(--text-main);
+        transform: translateX(4px);
+        box-shadow: 0 8px 20px var(--primary-glow);
+    }
+</style>
+
+<!-- SIDEBAR -->
+<div class="sidebar">
+
+    <div class="logo">
+        <h2>Workforce Admin</h2>
+        <p>Management Portal</p>
+    </div>
+
+    <nav>
+        <a class="<?php echo ($page=='home') ? 'active-page' : ''; ?>" href="dashboard.php">
+            <span>📊</span> Dashboard
+        </a>
+        <a class="<?php echo ($page=='employees') ? 'active-page' : ''; ?>" href="dashboard.php?page=employees">
+            <span>👥</span> Employees
+        </a>
+        <a class="<?php echo ($page=='attendance') ? 'active-page' : ''; ?>" href="dashboard.php?page=attendance">
+            <span>⏰</span> Attendance Logs
+        </a>
+        <a class="<?php echo ($page=='hourly-update') ? 'active-page' : ''; ?>" href="dashboard.php?page=hourly-update">
+            <span>📝</span> Hourly Updates
+        </a>
+        <a class="<?php echo ($page=='penalties') ? 'active-page' : ''; ?>" href="dashboard.php?page=penalties">
+            <span>💸</span> Salaries & Deduct
+        </a>
+        <a class="<?php echo ($page=='reports') ? 'active-page' : ''; ?>" href="dashboard.php?page=reports">
+            <span>📁</span> Employee Reports
+        </a>
+        <a class="<?php echo ($page=='leave-requests') ? 'active-page' : ''; ?>" href="dashboard.php?page=leave-requests">
+            <span>📅</span> Leave Approvals
+        </a>
+        <a class="<?php echo ($page=='misconduct-penalty') ? 'active-page' : ''; ?>" href="dashboard.php?page=misconduct-penalty">
+            <span>⚠️</span> Log Misconduct
+        </a>
+    </nav>
+
+    <a href="../logout.php" style="margin-top: auto; background: rgba(239, 68, 68, 0.1); color: var(--danger); border-color: rgba(239, 68, 68, 0.2);">
+        <span>🚪</span> Logout
+    </a>
+
+</div>
+
+<!-- MAIN VIEWPORT -->
+<div class="main">
+
+    <?php if($page == 'home'){ 
+        // HOME STATISTICS QUERIES
+        $employees = $conn->query("
+            SELECT * FROM users 
+            WHERE role='employee'
+            ORDER BY id DESC
+            LIMIT 5
+        ");
+
+        $total = $conn->query("
+            SELECT COUNT(*) as total 
+            FROM users 
+            WHERE role='employee'
+        ")->fetch_assoc();
+
+        $penalties = $conn->query("
+            SELECT SUM(amount) as total 
+            FROM penalties
+        ")->fetch_assoc();
+
+        $attendance = $conn->query("
+            SELECT COUNT(*) as total 
+            FROM shifts 
+            WHERE status='active'
+        ")->fetch_assoc();
+    ?>
+
+        <!-- TOP HEADER BAR -->
+        <div class="topbar">
+            <div>
+                <h1>Welcome Back, <?php echo htmlspecialchars($user['name']); ?> 👋</h1>
+                <p>Monitor your active employee workforce, coordinate shift logs, and authorize pending leave requests.</p>
+            </div>
+        </div>
+
+        <!-- STATS LAYOUT -->
+        <div class="grid">
+            <div class="card stat-box">
+                <h4>Total Employees</h4>
+                <h2><?php echo $total['total'] ?? 0; ?></h2>
+            </div>
+
+            <div class="card stat-box">
+                <h4>Active Work Shifts</h4>
+                <h2><?php echo $attendance['total'] ?? 0; ?></h2>
+            </div>
+
+            <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
+                <h4>Total Fines Logged</h4>
+                <h2 style="color: var(--danger);">PKR <?php echo number_format($penalties['total'] ?? 0); ?></h2>
+            </div>
+        </div>
+
+        <!-- RECENT EMPLOYEES GRID -->
+        <div class="card">
+            <h2>Recent Additions</h2>
+            
+            <div class="table-box">
+                <table>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Email Address</th>
+                        <th>Salary</th>
+                    </tr>
+                    <?php if($employees->num_rows > 0){ 
+                        while($row = $employees->fetch_assoc()){
+                    ?>
+                        <tr>
+                            <td>#<?php echo $row['id']; ?></td>
+                            <td><strong><?php echo htmlspecialchars($row['name']); ?></strong></td>
+                            <td><?php echo htmlspecialchars($row['email']); ?></td>
+                            <td style="color: var(--accent); font-weight: 600;">PKR <?php echo number_format($row['salary']); ?></td>
+                        </tr>
+                        <?php } 
+                    } else { ?>
+                        <tr>
+                            <td colspan="4" style="text-align: center; color: var(--text-muted);">No employee records found.</td>
+                        </tr>
+                    <?php } ?>
+                </table>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <a href="dashboard.php?page=employees" class="btn">👥 Manage Employees</a>
+            </div>
+        </div>
+
+    <?php } else {
+        if($page == 'employees') include "employees.php";
+        elseif($page == 'attendance') include "attendance.php";
+        elseif($page == 'hourly-update') include "hourly-update.php";
+        elseif($page == 'penalties') include "penalties.php";
+        elseif($page == 'reports') include "reports.php";
+        elseif($page == 'leave-requests') include "leave-requests.php";
+        elseif($page == 'misconduct-penalty') include "misconduct-penalty.php";
+        elseif($page == 'salary-slip') include "salary-slip.php";
+    } ?>
+
+</div>
+
+<?php include "../includes/footer.php"; ?>

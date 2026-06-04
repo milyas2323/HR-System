@@ -1,0 +1,29 @@
+---
+description: Read and update in-repo agent memory before and after work
+alwaysApply: true
+---
+
+# Agent memory protocol
+
+This project keeps persistent context under `docs/agent-memory/` and `AGENTS.md`.
+
+## Before starting work
+
+1. Read `AGENTS.md` (root).
+2. Skim `docs/agent-memory/PROJECT_OVERVIEW.md`.
+3. Read the **last 3** dated entries in `docs/agent-memory/SESSION_LOG.md`.
+4. Check `docs/agent-memory/KNOWN_ISSUES.md` for related open items.
+
+## After completing meaningful work
+
+Append to `docs/agent-memory/SESSION_LOG.md` using the template in that file:
+
+- **Date** (YYYY-MM-DD), **scope** (files/areas), **summary**, **outcome**, **follow-ups** (if any).
+
+Also update when applicable:
+
+- `KNOWN_ISSUES.md` — resolve, add, or reword issues.
+- `DECISIONS.md` — new architectural or product choices.
+- `PROJECT_OVERVIEW.md` — only if structure, schema, or business rules changed.
+
+Keep entries factual and short. Never commit credentials into memory files.

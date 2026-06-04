@@ -1,0 +1,95 @@
+# Project overview — Employee Attendance System
+
+Last updated: 2026-06-04
+
+## Purpose
+
+PHP web app for workforce attendance: geofenced check-in, evening shifts, hourly status updates, automated penalties, leave requests, salary slips, and admin reporting. Branded in UI as **Workforce Hub** / Employee Attendance System.
+
+## Environment
+
+| Item | Value |
+|------|--------|
+| Runtime | PHP on XAMPP (Apache) |
+| Database | MySQL `employee_system` @ `localhost`, user `root`, empty password (dev) |
+| Timezone | `Asia/Karachi` (PHP + MySQL `SET time_zone = '+05:00'`) |
+| Entry URL | `index.php` → `login.php` / `register.php` |
+
+## Directory layout
+
+```
+hr-system/
+├── index.php, login.php, register.php, logout.php, monthly-reset.php
+├── admin/          # Admin UI + cron scripts
+├── employee/       # Employee UI (check-in, hourly, leave, profile, salary)
+├── includes/       # db.php, auth.php, functions.php, header.php, footer.php
+├── database/       # migration.sql (reference / manual apply)
+├── assets/css/     # style.css, responsive.css
+└── uploads/        # screenshots (created at runtime)
+```
+
+## Authentication
+
+- Session key: `$_SESSION['user']` (full `users` row).
+- `includes/auth.php` — redirects unauthenticated users to `../login.php`.
+- Passwords: bcrypt preferred; `verifyPassword()` allows legacy plain text.
+- Login audits: `login_logs` (IP, device, geo via ip-api.com).
+
+## Roles & main pages
+
+### Admin (`admin/`)
+
+- `dashboard.php`, `employees.php`, `edit-employee.php`, `delete-employee.php`
+- `attendance.php`, `reports.php`, `leave-requests.php`
+- `penalties.php`, `misconduct-penalty.php`, `hourly-update.php`, `salary-slip.php`
+- **Cron (CLI/browser):** `cron_penalty_engine.php`, `cron_monthly_reset.php`
+- `last_audit.txt` — penalty engine audit artifact
+
+### Employee (`employee/`)
+
+- `dashboard.php`, `checkin.php`, `close-shift.php`
+- `hourly-update.php`, `end-report.php`
+- `leave-request.php`, `leave-status.php`
+- `profile.php`, `salary-slip.php`
+
+## Database & migrations
+
+- **Connection:** `includes/db.php` — mysqli + **self-healing schema** (ALTER/CREATE if columns/tables missing).
+- **Manual migration:** `database/migration.sql` mirrors major schema changes.
+- Notable tables/columns (inferred from code):
+  - `users` — roles, salary fields, `total_deduction`, geofence: `assigned_ip`, `assigned_location`, `assigned_latitude`, `assigned_longitude`, `assigned_radius`
+  - `shifts` — active shifts, device, IP, `current_location`, screenshots
+  - `hourly_updates` — `shift_id`, `slot_date`, `slot_hour`; unique `uniq_employee_shift_slot`
+  - `penalties`, `login_logs`, leave-related tables (see admin/employee leave pages)
+
+## Business rules (high level)
+
+### Shift & hourly updates
+
+- Evening shift model; **7 required** 15-minute slots (7:00 PM–1:15 AM windows) — see `HOURLY_UPDATES_REQUIRED` and `getHourlySlotDefinitionsForShift()` in `includes/functions.php`.
+- One submission per employee per shift per slot (DB unique key).
+
+### Penalties (`admin/cron_penalty_engine.php`)
+
+- Working days: Mon–Fri; Sat/Sun excluded.
+- Shift window documented in cron header: ~6:00 PM–3:00 AM.
+- Absence (no shift start): PKR 5,000 per missed weekday shift.
+- Missed hourly/end reports: 3 free per month, then PKR 1,000 each (monthly recount deletes prior automated penalty rows for that month).
+
+### Geofencing
+
+- `calculateDistance()` (Haversine) vs user `assigned_*` fields.
+- Check-in validates IP/location against assigned workstation (see `employee/checkin.php`).
+
+## Shared helpers (`includes/functions.php`)
+
+- `addPenalty()`, `getUserIP()`, `parseUserAgent()`, `calculateDistance()`
+- `verifyPassword()` / `hashPassword()`
+- Hourly slot helpers: `getHourlySlotDefinitionsForShift`, `hasHourlyUpdateInSlot`, `countMissedHourlySlotsForShift`, `getDatabaseNowTimestamp`
+
+## Conventions for agents
+
+- Procedural PHP pages; include `db.php` + `functions.php`; use existing mysqli style (mixed prepared statements and escaped queries).
+- Admin paths use `include "../includes/..."`; employee same pattern.
+- Prefer extending `functions.php` over duplicating logic.
+- Do not change `db.php` auto-migration blocks without updating `database/migration.sql` and this doc.

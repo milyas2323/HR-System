@@ -1,7 +1,7 @@
 <?php
-include "../includes/db.php";
-include "../includes/auth.php";
-include "../includes/functions.php";
+include_once "../includes/db.php";
+include_once "../includes/auth.php";
+include_once "../includes/functions.php";
 
 $user = $_SESSION['user'];
 
@@ -43,6 +43,9 @@ if($active){
 
     $missedSoFar = 0;
     foreach ($slots as $slot) {
+        if (!isHourlySlotRequiredForShift($slot, $active['start_time'])) {
+            continue;
+        }
         if ($dbNowTs > $slot['end_ts'] && !hasHourlyUpdateInSlot($conn, $employeeId, $shiftId, $slot['slot_date'], $slot['slot_hour'])) {
             $missedSoFar++;
         }
@@ -54,6 +57,35 @@ if($active){
         $warningMsg = "Submit your hourly update now for the " . $currentSlot['label'] . " window before it closes.";
     }
 }
+
+/* MISSED UPDATES (current month) */
+$employeeId = (int) $user['id'];
+$dbNowTs = getDatabaseNowTimestamp($conn);
+$currentMonthStart = date('Y-m-01');
+$currentMonthEnd = date('Y-m-t');
+$monthShifts = [];
+$monthShiftsResult = $conn->query("
+    SELECT * FROM shifts
+    WHERE employee_id='$employeeId'
+    AND DATE(start_time) BETWEEN '$currentMonthStart' AND '$currentMonthEnd'
+    ORDER BY start_time DESC
+");
+if ($monthShiftsResult) {
+    while ($row = $monthShiftsResult->fetch_assoc()) {
+        $monthShifts[] = $row;
+    }
+}
+$missedReport = buildEmployeeMissedUpdatesReport($conn, $employeeId, $monthShifts, $dbNowTs);
+$missedCounts = countBillableMissedUpdatesForShifts($conn, $employeeId, $monthShifts, $dbNowTs);
+$currentMonthKey = date('Y-m');
+$currentMonthSummary = null;
+foreach ($missedReport['monthly'] as $monthRow) {
+    if ($monthRow['month'] === $currentMonthKey) {
+        $currentMonthSummary = $monthRow;
+        break;
+    }
+}
+$expectedMissedFine = calculateMissedUpdatesFineAmount($missedCounts['billable']);
 ?>
 <?php include "../includes/header.php"; ?>
 
@@ -174,6 +206,111 @@ if($active){
                 <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 10px;">
                     Deductions accrued this month from absences, missed hourly slots (:00–:15 windows), or missed end reports.
                 </p>
+            </div>
+
+            <!-- MISSED UPDATES SUMMARY -->
+            <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
+                <h2>Missed Updates (<?php echo date('M Y'); ?>)</h2>
+                <p style="font-size: 2rem; font-family: var(--font-heading); font-weight: 800; color: var(--danger); margin: 0;">
+                    <?php echo (int) $missedReport['total_missed']; ?>
+                </p>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 10px;">
+                    Total missed this month
+                    <?php if ($missedCounts['pending'] > 0) { ?>
+                        · <strong><?php echo (int) $missedCounts['pending']; ?></strong> pending on open shift
+                    <?php } ?>
+                </p>
+                <?php if ($currentMonthSummary) { ?>
+                    <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 8px;">
+                        <?php echo (int) $currentMonthSummary['hourly_missed']; ?> hourly slot(s)
+                        · <?php echo (int) $currentMonthSummary['summary_missed']; ?> end report(s)
+                    </p>
+                <?php } ?>
+                <?php if ($expectedMissedFine > 0) { ?>
+                    <p style="color: var(--danger); font-size: 0.8rem; margin-top: 8px;">
+                        Est. missed-update fine: PKR <?php echo number_format($expectedMissedFine); ?> (3 free/month, then PKR 1,000 each)
+                    </p>
+                <?php } ?>
+            </div>
+        </div>
+
+        <!-- MISSED UPDATES DETAIL -->
+        <div class="card">
+            <h2>Missed Updates — Daily Breakdown</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">
+                Per shift: missed hourly windows (:00–:15) and end-of-day report. Open shift slots are not counted until the window closes.
+            </p>
+
+            <?php if ($active && $missedCounts['pending'] > 0) { ?>
+                <div class="alert warning" style="margin-bottom: 16px;">
+                    <span>⚠️</span>
+                    <span>Your active shift has <strong><?php echo (int) $missedCounts['pending']; ?></strong> missed update(s) so far. Submit during each 15-minute window to avoid penalties.</span>
+                </div>
+            <?php } ?>
+
+            <div class="table-box">
+                <table>
+                    <tr>
+                        <th>Workday</th>
+                        <th>Clock In</th>
+                        <th>Shift</th>
+                        <th>Hourly (filled / req.)</th>
+                        <th>Missed Slots</th>
+                        <th>End Report</th>
+                        <th>Total Missed</th>
+                    </tr>
+                    <?php if (count($missedReport['daily']) > 0) {
+                        foreach ($missedReport['daily'] as $dayRow) {
+                    ?>
+                        <tr>
+                            <td><strong><?php echo date('d M Y', strtotime($dayRow['date'])); ?></strong></td>
+                            <td style="font-size: 0.85rem;"><?php echo date('h:i A', strtotime($dayRow['start_time'])); ?></td>
+                            <td>
+                                <span class="badge <?php echo $dayRow['status'] === 'active' ? 'success' : 'warning'; ?>">
+                                    <?php echo strtoupper($dayRow['status']); ?>
+                                </span>
+                            </td>
+                            <td>
+                                <?php echo (int) $dayRow['hourly_filled']; ?> / <?php echo (int) $dayRow['hourly_required']; ?>
+                                <?php if ($dayRow['hourly_missed'] > 0) { ?>
+                                    <span class="badge danger" style="margin-left: 4px;"><?php echo (int) $dayRow['hourly_missed']; ?> missed</span>
+                                <?php } ?>
+                            </td>
+                            <td style="font-size: 0.8rem; max-width: 260px; line-height: 1.5;">
+                                <?php if (count($dayRow['missed_slots']) > 0) { ?>
+                                    <?php foreach ($dayRow['missed_slots'] as $label) { ?>
+                                        <span class="badge danger" style="margin: 2px 4px 2px 0; font-size: 0.7rem;"><?php echo htmlspecialchars($label); ?></span>
+                                    <?php } ?>
+                                <?php } else { ?>
+                                    <span style="color: var(--text-muted);">—</span>
+                                <?php } ?>
+                            </td>
+                            <td>
+                                <?php
+                                if ($dayRow['status'] === 'active' && !$dayRow['summary_missed']) {
+                                    echo '<span class="badge warning">Pending</span>';
+                                } elseif ($dayRow['summary_missed']) {
+                                    echo '<span class="badge danger">Missed</span>';
+                                } else {
+                                    echo '<span class="badge success">Submitted</span>';
+                                }
+                                ?>
+                            </td>
+                            <td>
+                                <strong style="color: <?php echo $dayRow['total_missed'] > 0 ? 'var(--danger)' : 'var(--success)'; ?>;">
+                                    <?php echo (int) $dayRow['total_missed']; ?>
+                                </strong>
+                            </td>
+                        </tr>
+                    <?php }
+                    } else { ?>
+                        <tr>
+                            <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                                No shifts recorded for <?php echo date('F Y'); ?> yet.
+                            </td>
+                        </tr>
+                    <?php } ?>
+                </table>
             </div>
         </div>
 

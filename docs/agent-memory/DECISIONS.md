@@ -13,6 +13,12 @@ Record non-obvious choices so future sessions do not reverse them without reason
 
 ---
 
+### 2026-06-05 — User approval before changes/commands
+
+- **Decision:** Agent must ask user and wait for explicit approval before editing files or running shell commands.
+- **Rationale:** User preference; avoids unsolicited changes and command execution.
+- **Rule file:** `.cursor/rules/approval-before-action.mdc` (`alwaysApply: true`).
+
 ### 2026-06-04 — In-repo agent memory
 
 - **Decision:** Store agent context under `docs/agent-memory/` with root `AGENTS.md` and Cursor rule `.cursor/rules/agent-memory.mdc` (`alwaysApply: true`).

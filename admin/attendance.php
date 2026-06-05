@@ -1,6 +1,6 @@
 <?php
-include "../includes/db.php";
-include "../includes/auth.php";
+include_once "../includes/db.php";
+include_once "../includes/auth.php";
 
 if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");

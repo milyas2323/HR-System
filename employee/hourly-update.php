@@ -1,7 +1,7 @@
 <?php
-include "../includes/db.php";
-include "../includes/auth.php";
-include "../includes/functions.php";
+include_once "../includes/db.php";
+include_once "../includes/auth.php";
+include_once "../includes/functions.php";
 
 if($_SESSION['user']['role'] != 'employee'){
     header("Location: ../login.php");
@@ -44,8 +44,8 @@ if(isset($_POST['submit'])){
             $message = "You already submitted an update for the " . $slot['label'] . " slot. Duplicate entries are not allowed.";
         } else {
             $stmt = $conn->prepare("
-                INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, update_text)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text)
+                VALUES (?, ?, ?, ?, 0, ?)
             ");
             $slot_hour = (int) $slot['slot_hour'];
             $stmt->bind_param("iisis", $employee_id, $shift_id, $slot['slot_date'], $slot_hour, $update_text);
@@ -121,7 +121,10 @@ if(isset($_POST['submit'])){
                     </tr>
                     <?php foreach($slots as $slot) {
                         $filled = hasHourlyUpdateInSlot($conn, $employee_id, (int)$activeShift['id'], $slot['slot_date'], $slot['slot_hour']);
-                        if ($filled) {
+                        if (!isHourlySlotRequiredForShift($slot, $activeShift['start_time'])) {
+                            $status = 'N/A (before clock-in)';
+                            $badge = 'warning';
+                        } elseif ($filled) {
                             $status = 'Submitted';
                             $badge = 'success';
                         } elseif ($dbNowTs > $slot['end_ts']) {

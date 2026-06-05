@@ -15,6 +15,55 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+### 2026-06-05 — Fix false missed slots after backfill
+
+- **Scope:** `includes/functions.php`, `employee/hourly-update.php`, `employee/dashboard.php`
+- **Summary:** User still saw incorrect missed slots; orphans on wrong shift_id + slots before clock-in counted as missed.
+- **Outcome:** `hasHourlyUpdateInSlot` matches employee+slot (any shift); skip slots ending before shift start; employee UI shows N/A for pre-clock-in windows.
+- **Follow-ups:** Remaining misses are genuine (no on-time row); 25 late legacy rows intentionally not counted.
+
+### 2026-06-05 — Backfill script for legacy hourly slot data
+
+- **Scope:** `database/backfill_hourly_slots.php`
+- **Summary:** User asked to fix existing hourly_updates without time-bound slot data; onward only in-window entries count as filled.
+- **Outcome:** CLI + admin browser script: match shift at created_at, backfill if inside :00–:15 window, clear/delete late/duplicate rows.
+- **Follow-ups:** Ran on local DB: 62 scanned, 36 backfilled, 25 late cleared, 1 duplicate removed, 0 errors.
+
+### 2026-06-05 — User workflow: approval before changes/commands
+
+- **Scope:** `.cursor/rules/approval-before-action.mdc`, `AGENTS.md`, `DECISIONS.md`
+- **Summary:** User asked agent to always ask before file changes and before running commands; no unsolicited syntax checks.
+- **Outcome:** Added always-on Cursor rule and updated agent docs.
+- **Follow-ups:** Follow on every future task.
+
+### 2026-06-05 — Fix missed updates showing 0 penalty
+
+- **Scope:** `includes/functions.php`, `admin/reports.php`, `admin/dashboard.php`
+- **Summary:** User saw 35 missed updates but PKR 0 penalty. Causes: fines only ran once/day; active/unclosed shifts excluded from penalty engine but included in report audit.
+- **Outcome:** `isShiftAuditableForMissedUpdateFines()` (includes all slots ended); penalty runs on every admin/reports load; reports show billable vs pending missed separately.
+- **Follow-ups:** Refresh Reports page — Waleed should show ~PKR 32,000 missed-update fine if 35 billable.
+
+### 2026-06-05 — Fix incorrect absence penalties + reports
+
+- **Scope:** `includes/functions.php`, `admin/cron_penalty_engine.php`, `admin/reports.php`
+- **Summary:** User said penalty breakdown not correct (8 missed vs PKR 120k). Root cause: absence fines counted all month weekdays before employee joined/first shift.
+- **Outcome:** Absence counting starts day after first clock-in; no fines until first shift. Extracted `runMonthlyPenaltyAudit` / `recalculateAllAutomatedPenalties`. Reports: net salary uses this-month penalties; recalculate button; expected missed-update fine hint.
+- **Follow-ups:** Click **Recalculate automated penalties** on Reports once on live DB.
+
+### 2026-06-04 — Employee report penalty breakdown section
+
+- **Scope:** `admin/reports.php`, `includes/functions.php`
+- **Summary:** User wanted full separate penalty breakdown on employee report (clarify 8 missed vs PKR 120k).
+- **Outcome:** Added categorized penalty section (absences, missed-update fines, manual) with summary cards and line-item table; `classifyPenaltyType()` helper.
+- **Follow-ups:** None.
+
+### 2026-06-04 — Admin reports performance overview + missed updates
+
+- **Scope:** `admin/reports.php`, `includes/functions.php`
+- **Summary:** User wanted main reports page listing all employees with performance metrics; employee detail with missed updates (daily/monthly), not total updates count.
+- **Outcome:** Overview table (shifts, missed updates, penalty, net salary, View Details). Detail view: monthly/daily missed breakdown using slot rules; helpers `getMissedUpdatesBreakdownForShift`, `buildEmployeeMissedUpdatesReport`. Quick filters: Yesterday, Last 7 days, This month. Removed hourly submitted logs section from detail.
+- **Follow-ups:** None.
+
 ### 2026-06-04 — Admin attendance date filters (default today)
 
 - **Scope:** `admin/attendance.php`

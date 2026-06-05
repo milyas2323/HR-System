@@ -1,7 +1,7 @@
 <?php
 session_start();
-include "includes/db.php";
-include "includes/functions.php";
+include_once "includes/db.php";
+include_once "includes/functions.php";
 
 $message = "";
 

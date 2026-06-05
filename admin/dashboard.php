@@ -1,6 +1,6 @@
 <?php
-include "../includes/db.php";
-include "../includes/auth.php";
+include_once "../includes/db.php";
+include_once "../includes/auth.php";
 
 if($_SESSION['user']['role'] != 'admin'){
     header("Location: ../login.php");
@@ -10,15 +10,9 @@ if($_SESSION['user']['role'] != 'admin'){
 $user = $_SESSION['user'];
 $page = isset($_GET['page']) ? $_GET['page'] : 'home';
 
-// --- PSEUDO-CRON AUTOMATED DAILY AUDIT TRIGGER ---
-$today = date('Y-m-d');
-$auditFile = __DIR__ . "/last_audit.txt";
-$lastAudit = @file_get_contents($auditFile);
-if ($lastAudit !== $today) {
-    // Dynamically include and run the penalty auditor
-    include __DIR__ . "/cron_penalty_engine.php";
-    @file_put_contents($auditFile, $today);
-}
+// --- PENALTY AUDIT: recalc current month on each admin visit (idempotent) ---
+include_once __DIR__ . "/../includes/functions.php";
+runMonthlyPenaltyAudit($conn);
 ?>
 <?php include "../includes/header.php"; ?>
 

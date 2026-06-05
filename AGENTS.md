@@ -15,8 +15,9 @@ This repository uses an **in-repo memory system** so Cursor agents retain contex
 ## Workflow (required)
 
 1. **Before coding** — Skim `PROJECT_OVERVIEW.md`, the last **3** entries in `SESSION_LOG.md`, and `KNOWN_ISSUES.md`.
-2. **While working** — Match existing PHP patterns (`includes/`, mysqli, session auth). Timezone: `Asia/Karachi`.
-3. **After meaningful changes** — Append one dated block to `SESSION_LOG.md` (see template in that file). Update `KNOWN_ISSUES.md` or `DECISIONS.md` if you fixed, found, or decided something.
+2. **Before any file edit or shell command** — Ask the user and wait for explicit approval (see `.cursor/rules/approval-before-action.mdc`).
+3. **While working** — Match existing PHP patterns (`includes/`, mysqli, session auth). Timezone: `Asia/Karachi`.
+4. **After meaningful changes** — Append one dated block to `SESSION_LOG.md` (see template in that file). Update `KNOWN_ISSUES.md` or `DECISIONS.md` if you fixed, found, or decided something.
 
 ## Quick facts
 

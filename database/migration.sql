@@ -30,6 +30,7 @@ ALTER TABLE shifts MODIFY COLUMN current_location TEXT DEFAULT NULL;
 ALTER TABLE hourly_updates ADD COLUMN shift_id INT DEFAULT NULL AFTER employee_id;
 ALTER TABLE hourly_updates ADD COLUMN slot_date DATE DEFAULT NULL AFTER shift_id;
 ALTER TABLE hourly_updates ADD COLUMN slot_hour TINYINT UNSIGNED DEFAULT NULL AFTER slot_date;
+ALTER TABLE hourly_updates ADD COLUMN is_grandfathered TINYINT(1) NOT NULL DEFAULT 0 AFTER slot_hour;
 ALTER TABLE hourly_updates ADD UNIQUE KEY uniq_employee_shift_slot (employee_id, shift_id, slot_date, slot_hour);
 
 

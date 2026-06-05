@@ -1,0 +1,27 @@
+---
+description: Ask user before editing files or running shell commands
+alwaysApply: true
+---
+
+# Approval before changes and commands
+
+## Required workflow
+
+1. **Before editing or creating any file** — Describe what you plan to change (files, summary, why). **Wait for explicit user approval** (e.g. "yes", "go ahead", "do it") before applying edits.
+
+2. **Before running any terminal/shell command** — State the exact command and what it does. **Wait for explicit user approval** before running it.
+
+## Exceptions (still mention, but may proceed if user already approved)
+
+- User message clearly says **"do it"**, **"fix it"**, **"implement"**, **"apply"**, or **"run it"** for that specific action.
+- User is answering a prior approval question you asked in the same task.
+
+## After approved changes
+
+- Give a short summary of what changed.
+- Do **not** run syntax checks, tests, or other commands unless the user approved those too, or asked for verification.
+
+## Questions and read-only exploration
+
+- Reading files, searching the codebase, and answering questions do **not** require approval.
+- If investigation might lead to changes, say what you found and ask before fixing.

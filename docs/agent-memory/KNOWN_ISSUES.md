@@ -16,6 +16,7 @@ Update when discovering or fixing items. Link files where helpful.
 | K-008 | Penalties | Weekend shifts still audited for missed hourly/end report; absence logic only excludes Sat/Sun. |
 | K-009 | Penalties | Active shift audited after `start_time + 9 hours` even if `status='active'` — can fine before employee closes shift. |
 | K-010 | Data | Legacy `hourly_updates` rows without `shift_id`/`slot_date`/`slot_hour` count as missed in penalty engine. |
+| K-011 | Penalties | **Fixed 2026-06-05:** Absence fines no longer count weekdays before join/first clock-in. Use Reports → Recalculate automated penalties to rebuild old incorrect rows. |
 
 ## Resolved
 

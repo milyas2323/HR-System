@@ -77,4 +77,10 @@ if ($checkSlotIndex && $checkSlotIndex->num_rows == 0) {
         ADD UNIQUE KEY uniq_employee_shift_slot (employee_id, shift_id, slot_date, slot_hour)
     ");
 }
+
+// 7. Grandfathered flag: legacy rows relaxed; new rows strict time-bound
+$checkGrandfathered = $conn->query("SHOW COLUMNS FROM hourly_updates LIKE 'is_grandfathered'");
+if ($checkGrandfathered && $checkGrandfathered->num_rows == 0) {
+    $conn->query("ALTER TABLE hourly_updates ADD COLUMN is_grandfathered TINYINT(1) NOT NULL DEFAULT 0 AFTER slot_hour");
+}
 ?>

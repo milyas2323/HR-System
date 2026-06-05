@@ -15,6 +15,50 @@ if (normalizeUserRole($_SESSION['user']['role'] ?? '') !== 'admin') {
 $user = $_SESSION['user'];
 $page = isset($_GET['page']) ? $_GET['page'] : 'home';
 
+// POST actions for included pages must run before any HTML output (reports.php is included later).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['recalculate_penalties'])) {
+    recalculateAllAutomatedPenalties($conn);
+    $_SESSION['msg'] = 'Automated penalties recalculated using corrected rules (no fines before first clock-in).';
+    $redirect = 'dashboard.php?page=reports';
+    if (!empty($_POST['employee_id'])) {
+        $redirect .= '&employee_id=' . (int) $_POST['employee_id'];
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_hourly_relaxation'])) {
+    $grantShiftId = (int) ($_POST['shift_id'] ?? 0);
+    $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    $adminName = $_SESSION['user']['name'] ?? 'Admin';
+
+    if ($grantShiftId > 0 && $grantEmployeeId > 0) {
+        $grantResult = grantAdminRelaxationForShiftMissedHourly($conn, $grantEmployeeId, $grantShiftId, $adminName);
+        if ($grantResult['credited'] > 0) {
+            runMonthlyPenaltyAudit($conn);
+        }
+        $_SESSION['msg'] = $grantResult['message']
+            . ($grantResult['credited'] > 0 ? ' Penalties recalculated.' : '');
+    } else {
+        $_SESSION['msg'] = 'Invalid relaxation request.';
+    }
+
+    $redirect = 'dashboard.php?page=reports&employee_id=' . $grantEmployeeId;
+    if (!empty($_POST['date_from']) && !empty($_POST['date_to'])) {
+        $redirect .= '&date_from=' . urlencode($_POST['date_from']) . '&date_to=' . urlencode($_POST['date_to']);
+    }
+    if (!empty($_POST['hourly_all'])) {
+        $redirect .= '&hourly_all=1';
+    } elseif (!empty($_POST['hourly_from']) && !empty($_POST['hourly_to'])) {
+        $redirect .= '&hourly_from=' . urlencode($_POST['hourly_from']) . '&hourly_to=' . urlencode($_POST['hourly_to']);
+    }
+    if (!empty($_POST['hourly_sort']) && $_POST['hourly_sort'] === 'asc') {
+        $redirect .= '&hourly_sort=asc';
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
 // --- PENALTY AUDIT: recalc current month on each admin visit (idempotent) ---
 runMonthlyPenaltyAudit($conn);
 ?>

@@ -6,11 +6,65 @@ if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
 }
 
+$today = date('Y-m-d');
+$show_all = isset($_GET['show_all']) && $_GET['show_all'] === '1';
+$date_from_input = trim($_GET['date_from'] ?? '');
+$date_to_input = trim($_GET['date_to'] ?? '');
+$dateFilterActive = false;
+$dateFilterError = '';
+$date_from = '';
+$date_to = '';
+$isDefaultToday = false;
+
+if ($show_all) {
+    $dateFilterActive = false;
+} elseif ($date_from_input === '' && $date_to_input === '') {
+    $dateFilterActive = true;
+    $isDefaultToday = true;
+    $date_from = $today;
+    $date_to = $today;
+    $date_from_input = $today;
+    $date_to_input = $today;
+} elseif ($date_from_input !== '' || $date_to_input !== '') {
+    if ($date_from_input === '' || $date_to_input === '') {
+        $dateFilterError = 'Please select both a start date and an end date.';
+    } else {
+        $df = DateTime::createFromFormat('Y-m-d', $date_from_input);
+        $dt = DateTime::createFromFormat('Y-m-d', $date_to_input);
+        $dfValid = $df && $df->format('Y-m-d') === $date_from_input;
+        $dtValid = $dt && $dt->format('Y-m-d') === $date_to_input;
+
+        if (!$dfValid || !$dtValid) {
+            $dateFilterError = 'Invalid date format. Use the date picker to select valid dates.';
+        } elseif ($df > $dt) {
+            $dateFilterError = 'Start date cannot be after end date.';
+        } else {
+            $dateFilterActive = true;
+            $date_from = $date_from_input;
+            $date_to = $date_to_input;
+            $isDefaultToday = ($date_from === $today && $date_to === $today);
+        }
+    }
+}
+
+function attendanceDateBetweenClause($conn, $column, $from, $to) {
+    $from = mysqli_real_escape_string($conn, $from);
+    $to = mysqli_real_escape_string($conn, $to);
+    return "DATE($column) BETWEEN '$from' AND '$to'";
+}
+
+$dateClauseShifts = $dateFilterActive
+    ? ' WHERE ' . attendanceDateBetweenClause($conn, 'start_time', $date_from, $date_to)
+    : '';
+
+$dateClauseShiftsAnd = $dateFilterActive
+    ? ' AND ' . attendanceDateBetweenClause($conn, 'start_time', $date_from, $date_to)
+    : '';
+
 /* =========================
    RESET ATTENDANCE DATA
    ========================= */
 if(isset($_POST['reset_attendance'])){
-    // Delete all shift attendance records
     $conn->query("DELETE FROM shifts");
     $_SESSION['msg'] = "Attendance data reset successfully!";
     echo "<script>window.location.href='dashboard.php?page=attendance';</script>";
@@ -18,12 +72,67 @@ if(isset($_POST['reset_attendance'])){
 }
 
 /* STATISTICS */
-$totalAttendance = $conn->query("SELECT COUNT(*) as total FROM shifts")->fetch_assoc();
-$activeShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status='active'")->fetch_assoc();
-$closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status='closed'")->fetch_assoc();
+$totalAttendance = $conn->query("SELECT COUNT(*) as total FROM shifts" . $dateClauseShifts)->fetch_assoc();
+$activeShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status='active'" . $dateClauseShiftsAnd)->fetch_assoc();
+$closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status='closed'" . $dateClauseShiftsAnd)->fetch_assoc();
 ?>
 
 <div class="page-title">Workplace Attendance Audit Log</div>
+
+<!-- DATE RANGE FILTER -->
+<div class="card">
+    <form method="GET" action="dashboard.php">
+        <input type="hidden" name="page" value="attendance">
+
+        <div class="form-group" style="margin-bottom: 0;">
+            <label>Filter by date range <span style="color: var(--text-muted); font-weight: normal;">(defaults to today)</span></label>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;">
+                <div>
+                    <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px; display: block;">From</label>
+                    <input type="date" name="date_from" value="<?php echo htmlspecialchars($date_from_input); ?>" style="max-width: 200px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px; display: block;">To</label>
+                    <input type="date" name="date_to" value="<?php echo htmlspecialchars($date_to_input); ?>" style="max-width: 200px;">
+                </div>
+                <button type="submit" class="btn glowing-element" style="margin-bottom: 0;">Apply Filters</button>
+                <a href="dashboard.php?page=attendance" class="btn-secondary" style="display: inline-flex; align-items: center; padding: 10px 16px; text-decoration: none; margin-bottom: 0;">
+                    Today
+                </a>
+                <?php if ($dateFilterActive) { ?>
+                    <a href="dashboard.php?page=attendance&amp;show_all=1" class="btn-secondary" style="display: inline-flex; align-items: center; padding: 10px 16px; text-decoration: none; margin-bottom: 0;">
+                        Show all records
+                    </a>
+                <?php } ?>
+            </div>
+        </div>
+    </form>
+
+    <?php if ($dateFilterError !== '') { ?>
+        <div class="alert danger" style="margin-top: 16px; margin-bottom: 0;">
+            <span>⚠️</span>
+            <span><?php echo htmlspecialchars($dateFilterError); ?></span>
+        </div>
+    <?php } elseif ($dateFilterActive) { ?>
+        <div class="alert info" style="margin-top: 16px; margin-bottom: 0;">
+            <span>ℹ️</span>
+            <span>
+                <?php if ($isDefaultToday && $date_from === $date_to) { ?>
+                    Showing <strong>today's</strong> attendance (<?php echo date('d M Y', strtotime($date_from)); ?>).
+                <?php } elseif ($date_from === $date_to) { ?>
+                    Showing attendance for <strong><?php echo date('d M Y', strtotime($date_from)); ?></strong>.
+                <?php } else { ?>
+                    Showing attendance from <strong><?php echo date('d M Y', strtotime($date_from)); ?></strong> to <strong><?php echo date('d M Y', strtotime($date_to)); ?></strong>.
+                <?php } ?>
+            </span>
+        </div>
+    <?php } elseif ($show_all) { ?>
+        <div class="alert info" style="margin-top: 16px; margin-bottom: 0;">
+            <span>ℹ️</span>
+            <span>Showing <strong>all</strong> attendance records (no date filter).</span>
+        </div>
+    <?php } ?>
+</div>
 
 <!-- SYSTEM ACTIONS -->
 <div style="display: flex; justify-content: flex-end; margin-bottom: 20px;">
@@ -37,24 +146,24 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
 <!-- STATS SUMMARY GRID -->
 <div class="grid">
     <div class="card stat-box">
-        <h4>Total Audit Records</h4>
+        <h4>Audit Records<?php echo $dateFilterActive ? ' (in range)' : ''; ?></h4>
         <h2><?php echo $totalAttendance['total'] ?? 0; ?></h2>
     </div>
 
     <div class="card stat-box" style="border-bottom: 4px solid var(--success);">
-        <h4>Active Workshifts</h4>
+        <h4>Active Workshifts<?php echo $dateFilterActive ? ' (in range)' : ''; ?></h4>
         <h2 style="color: var(--success);"><?php echo $activeShifts['total'] ?? 0; ?></h2>
     </div>
 
     <div class="card stat-box">
-        <h4>Closed Shifts</h4>
+        <h4>Closed Shifts<?php echo $dateFilterActive ? ' (in range)' : ''; ?></h4>
         <h2><?php echo $closedShifts['total'] ?? 0; ?></h2>
     </div>
 </div>
 
 <!-- LOG DATA TABLE -->
 <div class="card">
-    <h2>Attendance Shifts</h2>
+    <h2>Attendance Shifts<?php echo $dateFilterActive ? ' — filtered' : ($show_all ? ' — all records' : ''); ?></h2>
 
     <div class="table-box">
         <table>
@@ -72,7 +181,8 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
                 SELECT s.*, u.name
                 FROM shifts s
                 JOIN users u ON u.id = s.employee_id
-                ORDER BY s.id DESC
+                $dateClauseShifts
+                ORDER BY s.start_time DESC
             ");
 
             if($logs && $logs->num_rows > 0){
@@ -82,7 +192,7 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
             ?>
                 <tr>
                     <td><strong><?php echo htmlspecialchars($row['name']); ?></strong></td>
-                    
+
                     <td>
                         <?php if(!empty($row['screenshot'])){ ?>
                             <a href="../uploads/screenshots/<?php echo $row['screenshot']; ?>" target="_blank">
@@ -128,11 +238,11 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
                         <?php } ?>
                     </td>
                 </tr>
-            <?php } 
+            <?php }
             } else { ?>
                 <tr>
                     <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
-                        No workday shifts logged in the system.
+                        No workday shifts<?php echo $dateFilterActive ? ' in the selected date range' : ''; ?>.
                     </td>
                 </tr>
             <?php } ?>

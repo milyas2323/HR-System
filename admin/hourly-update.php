@@ -49,16 +49,6 @@ $dateClauseHourlyBare = $dateFilterActive
     ? ' WHERE ' . hourlyUpdateDateBetweenClause($conn, 'created_at', $date_from, $date_to)
     : '';
 
-/* =========================
-   RESET HOURLY UPDATES
-   ========================= */
-if(isset($_POST['reset_updates'])){
-    $conn->query("DELETE FROM hourly_updates");
-    $_SESSION['msg'] = "Hourly updates log reset successfully!";
-    echo "<script>window.location.href='dashboard.php?page=hourly-update';</script>";
-    exit();
-}
-
 /* SUMMARY DETAILS */
 $totalUpdates = $conn->query("SELECT COUNT(*) as total FROM hourly_updates" . $dateClauseHourlyBare)->fetch_assoc();
 $totalEmployees = $conn->query("SELECT COUNT(*) as total FROM users WHERE role='employee'")->fetch_assoc();

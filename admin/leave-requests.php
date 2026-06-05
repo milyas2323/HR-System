@@ -6,33 +6,6 @@ if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
 }
 
-/* =========================
-   APPROVE / REJECT LEAVE
-   ========================= */
-if(isset($_GET['action']) && isset($_GET['id'])){
-    $id = intval($_GET['id']);
-    $action = trim($_GET['action']);
-
-    if(in_array($action, ['approved', 'rejected'])){
-        // Add optional response message
-        $responseMsg = ($action === 'approved') ? 'Leave request approved by admin.' : 'Leave request rejected.';
-        
-        $stmt = $conn->prepare("
-            UPDATE leave_requests 
-            SET status=?, message=? 
-            WHERE id=?
-        ");
-        $stmt->bind_param("ssi", $action, $responseMsg, $id);
-        $stmt->execute();
-        
-        $_SESSION['msg'] = "Leave request successfully " . $action . "!";
-    }
-
-    // Redirect to dashboard page
-    echo "<script>window.location.href='dashboard.php?page=leave-requests';</script>";
-    exit();
-}
-
 /* FETCH ALL REQUESTS */
 $data = $conn->query("
     SELECT l.*, u.name, u.email

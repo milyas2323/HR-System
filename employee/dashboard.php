@@ -27,6 +27,91 @@ if ($refreshUser && $refreshUser->num_rows > 0) {
 }
 
 $page = $_GET['page'] ?? 'home';
+$hourlyUpdateMessage = '';
+$hourlyUpdateMessageType = 'danger';
+$endReportMessage = '';
+$endReportMessageType = 'danger';
+$leaveRequestMessage = '';
+$leaveRequestMessageType = 'danger';
+$profileMessage = '';
+$profileMessageType = 'danger';
+$checkinMessage = '';
+$checkinMessageType = 'danger';
+
+// Form POST handlers must run before any HTML output (sub-pages are included later).
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($page === 'hourly-update' && isset($_POST['submit'])) {
+        $submitResult = processEmployeeHourlyUpdateSubmission(
+            $conn,
+            (int) $user['id'],
+            $_POST['update_text'] ?? ''
+        );
+
+        if ($submitResult['success']) {
+            $_SESSION['hourly_success_popup'] = $submitResult['popup'];
+            header('Location: dashboard.php?page=hourly-update');
+            exit();
+        }
+
+        $hourlyUpdateMessage = $submitResult['message'];
+        $hourlyUpdateMessageType = $submitResult['messageType'];
+    } elseif ($page === 'end-report' && isset($_POST['submit'])) {
+        $submitResult = processEmployeeEndReportSubmission(
+            $conn,
+            (int) $user['id'],
+            $_POST['report'] ?? ''
+        );
+
+        if ($submitResult['success']) {
+            $_SESSION['msg'] = $submitResult['message'];
+            header('Location: dashboard.php');
+            exit();
+        }
+
+        $endReportMessage = $submitResult['message'];
+        $endReportMessageType = $submitResult['messageType'];
+    } elseif ($page === 'leave-request' && isset($_POST['submit'])) {
+        $submitResult = processEmployeeLeaveRequestSubmission(
+            $conn,
+            (int) $user['id'],
+            $_POST['reason'] ?? '',
+            $_POST['from_date'] ?? '',
+            $_POST['to_date'] ?? ''
+        );
+
+        if ($submitResult['success']) {
+            $_SESSION['msg'] = $submitResult['message'];
+            header('Location: dashboard.php');
+            exit();
+        }
+
+        $leaveRequestMessage = $submitResult['message'];
+        $leaveRequestMessageType = $submitResult['messageType'];
+    } elseif ($page === 'profile' && isset($_POST['upload'])) {
+        $submitResult = processEmployeeProfileUpload($conn, (int) $user['id'], $_FILES['profile_pic'] ?? []);
+
+        if ($submitResult['success']) {
+            $_SESSION['user']['profile_pic'] = $submitResult['filename'];
+            $_SESSION['msg'] = $submitResult['message'];
+            header('Location: dashboard.php?page=profile');
+            exit();
+        }
+
+        $profileMessage = $submitResult['message'];
+        $profileMessageType = $submitResult['messageType'];
+    } elseif ($page === 'start-shift' && isset($_POST['start_shift'])) {
+        $submitResult = processEmployeeStartShift($conn, (int) $user['id'], $_POST);
+
+        if ($submitResult['success']) {
+            $_SESSION['msg'] = $submitResult['message'];
+            header('Location: dashboard.php');
+            exit();
+        }
+
+        $checkinMessage = $submitResult['message'];
+        $checkinMessageType = $submitResult['messageType'];
+    }
+}
 
 /* ACTIVE SHIFT */
 $shift = $conn->query("

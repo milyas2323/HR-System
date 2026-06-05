@@ -6,25 +6,6 @@ if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
 }
 
-/* =========================
-   APPLY MISCONDUCT PENALTY
-   ========================= */
-if(isset($_POST['submit'])){
-    $employee_id = intval($_POST['employee_id']);
-    $reason = trim($_POST['reason']);
-    $amount = floatval($_POST['amount']);
-
-    if($employee_id > 0 && !empty($reason) && $amount > 0){
-        // Add manual penalty via helper
-        addPenalty($conn, $employee_id, $reason, $amount);
-        
-        $_SESSION['msg'] = "Misconduct penalty of PKR " . number_format($amount) . " applied successfully!";
-        echo "<script>window.location.href='dashboard.php?page=misconduct-penalty';</script>";
-        exit();
-    } else {
-        $_SESSION['msg'] = "Please verify all form inputs.";
-    }
-}
 ?>
 
 <div class="page-title">Log Misconduct Incidents</div>

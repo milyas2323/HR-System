@@ -1,74 +1,8 @@
 <?php
-include_once "../includes/db.php";
-include_once "../includes/functions.php";
-
-if(session_status() == PHP_SESSION_NONE){
-    session_start();
-}
-
-$user_id = $_SESSION['user']['id'];
-$user = $_SESSION['user'];
-
-// Refresh user info
-$refreshUser = $conn->query("SELECT * FROM users WHERE id='$user_id' LIMIT 1");
-if ($refreshUser && $refreshUser->num_rows > 0) {
-    $user = $refreshUser->fetch_assoc();
-}
-
-/* =========================
-   START SHIFT SUBMIT
-   ========================= */
-if(isset($_POST['start_shift'])){
-    $message   = mysqli_real_escape_string($conn, trim($_POST['message']));
-    $location  = mysqli_real_escape_string($conn, trim($_POST['current_location']));
-    $latitude  = mysqli_real_escape_string($conn, trim($_POST['current_latitude']));
-    $longitude = mysqli_real_escape_string($conn, trim($_POST['current_longitude']));
-    $ip        = getUserIP();
-
-    /* CHECK ACTIVE SHIFT */
-    $check = $conn->query("SELECT id FROM shifts WHERE employee_id='$user_id' AND status='active' LIMIT 1");
-    if($check->num_rows > 0){
-        echo "<script>alert('Shift is already active!'); window.location.href='dashboard.php';</script>";
-        exit();
-    }
-
-    /* SCREENSHOT SAVE */
-    $fileName = "";
-    if(!empty($_POST['screenshot_data'])){
-        $image = $_POST['screenshot_data'];
-        $image = str_replace('data:image/png;base64,', '', $image);
-        $image = str_replace(' ', '+', $image);
-        $imageData = base64_decode($image);
-
-        $folder = "../uploads/screenshots/";
-        if(!is_dir($folder)){
-            mkdir($folder, 0777, true);
-        }
-        $fileName = time() . "_" . $user_id . ".png";
-        file_put_contents($folder . $fileName, $imageData);
-    }
-
-    /* DEVICE / AGENT */
-    $ua = parseUserAgent($_SERVER['HTTP_USER_AGENT']);
-    $device = $ua['device'] . " (" . $ua['os'] . " / " . $ua['browser'] . ")";
-
-    /* INSERT SHIFT */
-    $insert = $conn->query("
-        INSERT INTO shifts
-        (employee_id, screenshot, morning_message, start_time, status, ip_address, device, current_location, current_latitude, current_longitude)
-        VALUES
-        ('$user_id', '$fileName', '$message', NOW(), 'active', '$ip', '$device', '$location', '$latitude', '$longitude')
-    ");
-
-    if($insert){
-
-
-        echo "<script>alert('Shift started successfully!'); window.location.href='dashboard.php';</script>";
-    } else {
-        echo "<script>alert('Database Error starting shift.');</script>";
-    }
-    exit();
-}
+// Included from dashboard.php — auth and POST handled there.
+$user_id = (int) $user['id'];
+$checkinAlertMessage = $checkinMessage ?? '';
+$checkinAlertType = $checkinMessageType ?? 'danger';
 ?>
 
 <div class="card">
@@ -77,7 +11,14 @@ if(isset($_POST['start_shift'])){
         To clock-in, share your screen (automatically captures workstation screenshot) and send a morning message.
     </p>
 
-    <form method="POST" id="checkinForm">
+    <?php if ($checkinAlertMessage !== '') { ?>
+        <div class="alert <?php echo htmlspecialchars($checkinAlertType); ?>" style="margin-bottom: 16px;">
+            <span>⚠️</span>
+            <span><?php echo htmlspecialchars($checkinAlertMessage); ?></span>
+        </div>
+    <?php } ?>
+
+    <form method="POST" action="dashboard.php?page=start-shift" id="checkinForm">
         <!-- LOCATION DETECTION -->
         <div class="form-group">
             <label>Workstation Location</label>

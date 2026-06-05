@@ -61,16 +61,6 @@ $dateClauseShiftsAnd = $dateFilterActive
     ? ' AND ' . attendanceDateBetweenClause($conn, 'start_time', $date_from, $date_to)
     : '';
 
-/* =========================
-   RESET ATTENDANCE DATA
-   ========================= */
-if(isset($_POST['reset_attendance'])){
-    $conn->query("DELETE FROM shifts");
-    $_SESSION['msg'] = "Attendance data reset successfully!";
-    echo "<script>window.location.href='dashboard.php?page=attendance';</script>";
-    exit();
-}
-
 /* STATISTICS */
 $totalAttendance = $conn->query("SELECT COUNT(*) as total FROM shifts" . $dateClauseShifts)->fetch_assoc();
 $activeShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status='active'" . $dateClauseShiftsAnd)->fetch_assoc();

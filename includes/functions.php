@@ -20,6 +20,299 @@ function dashboardUrlForRole($role) {
 }
 
 /**
+ * Process employee hourly update form submission.
+ */
+function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText) {
+    $employeeId = (int) $employeeId;
+    $updateText = trim((string) $updateText);
+    $result = [
+        'success' => false,
+        'message' => '',
+        'messageType' => 'danger',
+        'popup' => null,
+    ];
+
+    if ($updateText === '') {
+        $result['message'] = 'Please write a summary of your task before submitting.';
+        return $result;
+    }
+
+    $activeShift = $conn->query("
+        SELECT id, start_time FROM shifts
+        WHERE employee_id='$employeeId' AND status='active'
+        LIMIT 1
+    ")->fetch_assoc();
+
+    if (!$activeShift) {
+        $result['message'] = 'You must start your shift before submitting hourly updates.';
+        return $result;
+    }
+
+    $dbNowTs = getDatabaseNowTimestamp($conn);
+    $slots = getHourlySlotDefinitionsForShift($activeShift['start_time']);
+    $slot = findHourlySlotForTimestamp($slots, $dbNowTs);
+    $shiftId = (int) $activeShift['id'];
+
+    if (!$slot) {
+        $result['message'] = 'Submission rejected: updates are only accepted in each 15-minute window (e.g. 7:00–7:15 PM). The current time is outside all valid slots.';
+        return $result;
+    }
+
+    if (hasHourlyUpdateInSlot($conn, $employeeId, $shiftId, $slot['slot_date'], $slot['slot_hour'])) {
+        $result['message'] = 'You already submitted an update for the ' . $slot['label'] . ' slot. Duplicate entries are not allowed.';
+        return $result;
+    }
+
+    $stmt = $conn->prepare("
+        INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text)
+        VALUES (?, ?, ?, ?, 0, ?)
+    ");
+    $slotHour = (int) $slot['slot_hour'];
+    $stmt->bind_param('iisis', $employeeId, $shiftId, $slot['slot_date'], $slotHour, $updateText);
+
+    if ($stmt->execute()) {
+        $result['success'] = true;
+        $result['messageType'] = 'success';
+        $result['popup'] = [
+            'slot' => $slot['label'],
+            'submitted_at' => date('h:i A - d M Y'),
+        ];
+        return $result;
+    }
+
+    if (strpos($conn->error, 'uniq_employee_shift_slot') !== false) {
+        $result['message'] = 'Duplicate blocked: an update for this time slot was already recorded.';
+    } else {
+        $result['message'] = 'Database Error: ' . $conn->error;
+    }
+
+    return $result;
+}
+
+/**
+ * Process employee end-of-shift report submission.
+ */
+function processEmployeeEndReportSubmission($conn, $employeeId, $reportText) {
+    $employeeId = (int) $employeeId;
+    $reportText = trim((string) $reportText);
+    $result = ['success' => false, 'message' => '', 'messageType' => 'danger'];
+
+    if ($reportText === '') {
+        $result['message'] = 'Please enter your report text before submitting.';
+        return $result;
+    }
+
+    $active = $conn->query("
+        SELECT id FROM shifts
+        WHERE employee_id='$employeeId' AND status='active'
+        LIMIT 1
+    ")->fetch_assoc();
+
+    if (!$active) {
+        $result['message'] = 'No active shift found to close.';
+        return $result;
+    }
+
+    $shiftId = (int) $active['id'];
+    $stmt = $conn->prepare("
+        INSERT INTO end_reports (employee_id, shift_id, report_text)
+        VALUES (?, ?, ?)
+    ");
+    $stmt->bind_param('iis', $employeeId, $shiftId, $reportText);
+
+    if (!$stmt->execute()) {
+        $result['message'] = 'Database Error: ' . $conn->error;
+        return $result;
+    }
+
+    $conn->query("UPDATE shifts SET status='closed', end_time=NOW() WHERE id='$shiftId'");
+    $result['success'] = true;
+    $result['messageType'] = 'success';
+    $result['message'] = 'Shift closed and daily report submitted successfully!';
+    return $result;
+}
+
+/**
+ * Process employee leave request submission.
+ */
+function processEmployeeLeaveRequestSubmission($conn, $employeeId, $reason, $fromDate, $toDate) {
+    $employeeId = (int) $employeeId;
+    $reason = trim((string) $reason);
+    $fromDate = trim((string) $fromDate);
+    $toDate = trim((string) $toDate);
+    $result = ['success' => false, 'message' => '', 'messageType' => 'danger'];
+
+    if ($reason === '' || $fromDate === '' || $toDate === '') {
+        $result['message'] = 'Please complete all fields.';
+        return $result;
+    }
+
+    if (strtotime($fromDate) > strtotime($toDate)) {
+        $result['message'] = "The 'From Date' must be before or equal to the 'To Date'.";
+        return $result;
+    }
+
+    $stmt = $conn->prepare("
+        INSERT INTO leave_requests (employee_id, reason, from_date, to_date, status)
+        VALUES (?, ?, ?, ?, 'pending')
+    ");
+    $stmt->bind_param('isss', $employeeId, $reason, $fromDate, $toDate);
+
+    if ($stmt->execute()) {
+        $result['success'] = true;
+        $result['messageType'] = 'success';
+        $result['message'] = 'Leave request submitted successfully. Waiting for admin approval!';
+        return $result;
+    }
+
+    $result['message'] = 'Database Error: ' . $conn->error;
+    return $result;
+}
+
+/**
+ * Process employee profile picture upload.
+ */
+function processEmployeeProfileUpload($conn, $employeeId, $fileInput) {
+    $employeeId = (int) $employeeId;
+    $result = ['success' => false, 'message' => '', 'messageType' => 'danger', 'filename' => null];
+
+    if (empty($fileInput['name'])) {
+        $result['message'] = 'Please select an image file to upload.';
+        return $result;
+    }
+
+    $ext = pathinfo($fileInput['name'], PATHINFO_EXTENSION);
+    $newFilename = time() . '_' . $employeeId . '.' . $ext;
+    $folder = __DIR__ . '/../uploads/profile/';
+
+    if (!is_dir($folder)) {
+        mkdir($folder, 0777, true);
+    }
+
+    $path = $folder . $newFilename;
+    if (!move_uploaded_file($fileInput['tmp_name'], $path)) {
+        $result['message'] = 'File transfer failed. Verify write permissions on uploads/profile/ folder.';
+        return $result;
+    }
+
+    $newFilenameEsc = mysqli_real_escape_string($conn, $newFilename);
+    $ok = $conn->query("UPDATE users SET profile_pic='$newFilenameEsc' WHERE id='$employeeId'");
+
+    if (!$ok) {
+        $result['message'] = 'Database error: ' . $conn->error;
+        return $result;
+    }
+
+    $result['success'] = true;
+    $result['messageType'] = 'success';
+    $result['message'] = 'Profile picture uploaded successfully!';
+    $result['filename'] = $newFilename;
+    return $result;
+}
+
+/**
+ * Process employee shift check-in.
+ */
+function processEmployeeStartShift($conn, $employeeId, $postData) {
+    $employeeId = (int) $employeeId;
+    $result = ['success' => false, 'message' => '', 'messageType' => 'danger'];
+
+    $message = mysqli_real_escape_string($conn, trim($postData['message'] ?? ''));
+    $location = mysqli_real_escape_string($conn, trim($postData['current_location'] ?? ''));
+    $latitude = mysqli_real_escape_string($conn, trim($postData['current_latitude'] ?? ''));
+    $longitude = mysqli_real_escape_string($conn, trim($postData['current_longitude'] ?? ''));
+
+    $check = $conn->query("SELECT id FROM shifts WHERE employee_id='$employeeId' AND status='active' LIMIT 1");
+    if ($check && $check->num_rows > 0) {
+        $result['message'] = 'Shift is already active!';
+        return $result;
+    }
+
+    $fileName = '';
+    if (!empty($postData['screenshot_data'])) {
+        $image = str_replace('data:image/png;base64,', '', $postData['screenshot_data']);
+        $image = str_replace(' ', '+', $image);
+        $imageData = base64_decode($image);
+        $folder = __DIR__ . '/../uploads/screenshots/';
+        if (!is_dir($folder)) {
+            mkdir($folder, 0777, true);
+        }
+        $fileName = time() . '_' . $employeeId . '.png';
+        file_put_contents($folder . $fileName, $imageData);
+        $fileName = mysqli_real_escape_string($conn, $fileName);
+    }
+
+    $ip = mysqli_real_escape_string($conn, getUserIP());
+    $ua = parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '');
+    $device = mysqli_real_escape_string($conn, $ua['device'] . ' (' . $ua['os'] . ' / ' . $ua['browser'] . ')');
+    $location = mysqli_real_escape_string($conn, $location);
+    $latitude = mysqli_real_escape_string($conn, $latitude);
+    $longitude = mysqli_real_escape_string($conn, $longitude);
+
+    $insert = $conn->query("
+        INSERT INTO shifts
+        (employee_id, screenshot, morning_message, start_time, status, ip_address, device, current_location, current_latitude, current_longitude)
+        VALUES
+        ('$employeeId', '$fileName', '$message', NOW(), 'active', '$ip', '$device', '$location', '$latitude', '$longitude')
+    ");
+
+    if ($insert) {
+        $result['success'] = true;
+        $result['messageType'] = 'success';
+        $result['message'] = 'Shift started successfully!';
+        return $result;
+    }
+
+    $result['message'] = 'Database Error starting shift.';
+    return $result;
+}
+
+/**
+ * Process admin leave approve/reject action.
+ */
+function processAdminLeaveRequestAction($conn, $requestId, $action) {
+    $requestId = (int) $requestId;
+    $action = strtolower(trim((string) $action));
+
+    if (!in_array($action, ['approved', 'rejected'], true)) {
+        return ['success' => false, 'message' => 'Invalid leave action.'];
+    }
+
+    $responseMsg = ($action === 'approved')
+        ? 'Leave request approved by admin.'
+        : 'Leave request rejected.';
+
+    $stmt = $conn->prepare("UPDATE leave_requests SET status=?, message=? WHERE id=?");
+    $stmt->bind_param('ssi', $action, $responseMsg, $requestId);
+    $stmt->execute();
+
+    return [
+        'success' => true,
+        'message' => 'Leave request successfully ' . $action . '!',
+    ];
+}
+
+/**
+ * Process admin misconduct penalty form.
+ */
+function processAdminMisconductPenalty($conn, $employeeId, $reason, $amount) {
+    $employeeId = (int) $employeeId;
+    $reason = trim((string) $reason);
+    $amount = floatval($amount);
+
+    if ($employeeId <= 0 || $reason === '' || $amount <= 0) {
+        return ['success' => false, 'message' => 'Please verify all form inputs.'];
+    }
+
+    addPenalty($conn, $employeeId, $reason, $amount);
+
+    return [
+        'success' => true,
+        'message' => 'Misconduct penalty of PKR ' . number_format($amount) . ' applied successfully!',
+    ];
+}
+
+/**
  * Log a penalty and deduct salary
  */
 function addPenalty($conn, $employee_id, $reason, $amount){

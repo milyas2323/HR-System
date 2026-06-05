@@ -59,6 +59,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_hourly_relaxati
     exit();
 }
 
+if ($page === 'leave-requests' && isset($_GET['action'], $_GET['id'])) {
+    $leaveResult = processAdminLeaveRequestAction($conn, (int) $_GET['id'], $_GET['action']);
+    $_SESSION['msg'] = $leaveResult['message'];
+    header('Location: dashboard.php?page=leave-requests');
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_attendance'])) {
+    $conn->query('DELETE FROM shifts');
+    $_SESSION['msg'] = 'Attendance data reset successfully!';
+    header('Location: dashboard.php?page=attendance');
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_updates'])) {
+    $conn->query('DELETE FROM hourly_updates');
+    $_SESSION['msg'] = 'Hourly updates log reset successfully!';
+    header('Location: dashboard.php?page=hourly-update');
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'misconduct-penalty' && isset($_POST['submit'])) {
+    $penaltyResult = processAdminMisconductPenalty(
+        $conn,
+        (int) ($_POST['employee_id'] ?? 0),
+        $_POST['reason'] ?? '',
+        $_POST['amount'] ?? 0
+    );
+    $_SESSION['msg'] = $penaltyResult['message'];
+    header('Location: dashboard.php?page=misconduct-penalty');
+    exit();
+}
+
 // --- PENALTY AUDIT: recalc current month on each admin visit (idempotent) ---
 runMonthlyPenaltyAudit($conn);
 ?>

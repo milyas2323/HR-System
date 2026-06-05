@@ -1,16 +1,8 @@
 <?php
-include_once "../includes/db.php";
-include_once "../includes/auth.php";
-include_once "../includes/functions.php";
-
-if($_SESSION['user']['role'] != 'employee'){
-    header("Location: ../login.php");
-    exit();
-}
-
-$employee_id = (int) $_SESSION['user']['id'];
-$message = "";
-$messageType = "danger";
+// Included from dashboard.php — auth and POST submission handled there.
+$employee_id = (int) $user['id'];
+$message = $hourlyUpdateMessage ?? '';
+$messageType = $hourlyUpdateMessageType ?? 'danger';
 
 $activeShift = $conn->query("
     SELECT id, start_time FROM shifts
@@ -25,47 +17,6 @@ $dbNowTs = getDatabaseNowTimestamp($conn);
 if ($activeShift) {
     $slots = getHourlySlotDefinitionsForShift($activeShift['start_time']);
     $currentSlot = findHourlySlotForTimestamp($slots, $dbNowTs);
-}
-
-if(isset($_POST['submit'])){
-    $update_text = trim($_POST['update_text']);
-
-    if(empty($update_text)){
-        $message = "Please write a summary of your task before submitting.";
-    } elseif(!$activeShift){
-        $message = "You must start your shift before submitting hourly updates.";
-    } else {
-        $shift_id = (int) $activeShift['id'];
-        $slot = findHourlySlotForTimestamp($slots, $dbNowTs);
-
-        if(!$slot){
-            $message = "Submission rejected: updates are only accepted in each 15-minute window (e.g. 7:00–7:15 PM). The current time is outside all valid slots.";
-        } elseif(hasHourlyUpdateInSlot($conn, $employee_id, $shift_id, $slot['slot_date'], $slot['slot_hour'])){
-            $message = "You already submitted an update for the " . $slot['label'] . " slot. Duplicate entries are not allowed.";
-        } else {
-            $stmt = $conn->prepare("
-                INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text)
-                VALUES (?, ?, ?, ?, 0, ?)
-            ");
-            $slot_hour = (int) $slot['slot_hour'];
-            $stmt->bind_param("iisis", $employee_id, $shift_id, $slot['slot_date'], $slot_hour, $update_text);
-
-            if($stmt->execute()){
-                $_SESSION['hourly_success_popup'] = [
-                    'slot' => $slot['label'],
-                    'submitted_at' => date('h:i A - d M Y'),
-                ];
-                header('Location: dashboard.php?page=hourly-update');
-                exit();
-            } else {
-                if (strpos($conn->error, 'uniq_employee_shift_slot') !== false) {
-                    $message = "Duplicate blocked: an update for this time slot was already recorded.";
-                } else {
-                    $message = "Database Error: " . $conn->error;
-                }
-            }
-        }
-    }
 }
 ?>
 
@@ -154,7 +105,7 @@ if(isset($_POST['submit'])){
         $canSubmit = $currentSlot && !hasHourlyUpdateInSlot($conn, $employee_id, (int)$activeShift['id'], $currentSlot['slot_date'], $currentSlot['slot_hour']);
         ?>
 
-        <form method="POST">
+        <form method="POST" action="dashboard.php?page=hourly-update">
             <div class="form-group">
                 <label>Describe Your Current Work</label>
                 <textarea

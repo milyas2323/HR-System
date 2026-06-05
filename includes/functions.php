@@ -4,6 +4,22 @@ if(session_status() == PHP_SESSION_NONE){
 }
 
 /**
+ * Normalize role from DB/session (admin, employee).
+ */
+function normalizeUserRole($role) {
+    return strtolower(trim((string) $role));
+}
+
+/**
+ * Redirect URL for a user role after login.
+ */
+function dashboardUrlForRole($role) {
+    return normalizeUserRole($role) === 'admin'
+        ? 'admin/dashboard.php'
+        : 'employee/dashboard.php';
+}
+
+/**
  * Log a penalty and deduct salary
  */
 function addPenalty($conn, $employee_id, $reason, $amount){
@@ -486,6 +502,74 @@ function getMissedUpdatesBreakdownForShift($conn, $employeeId, $shiftRow, $audit
         'summary_missed' => $summaryMissed,
         'summary_count' => $summaryMissed ? 1 : 0,
         'total' => count($missedHourly) + ($summaryMissed ? 1 : 0),
+    ];
+}
+
+/**
+ * Admin: credit missed hourly slots for a shift by inserting grandfathered placeholder logs.
+ */
+function grantAdminRelaxationForShiftMissedHourly($conn, $employeeId, $shiftId, $grantedBy = 'Admin') {
+    $employeeId = (int) $employeeId;
+    $shiftId = (int) $shiftId;
+    $grantedBy = trim((string) $grantedBy);
+    if ($grantedBy === '') {
+        $grantedBy = 'Admin';
+    }
+    $grantedByEsc = mysqli_real_escape_string($conn, $grantedBy);
+
+    $shiftResult = $conn->query("
+        SELECT * FROM shifts
+        WHERE id='$shiftId' AND employee_id='$employeeId'
+        LIMIT 1
+    ");
+    if (!$shiftResult || $shiftResult->num_rows === 0) {
+        return ['success' => false, 'credited' => 0, 'message' => 'Shift not found for this employee.'];
+    }
+
+    $shift = $shiftResult->fetch_assoc();
+    $dbNowTs = getDatabaseNowTimestamp($conn);
+    $breakdown = getMissedUpdatesBreakdownForShift($conn, $employeeId, $shift, $dbNowTs);
+    $credited = 0;
+    $errors = 0;
+
+    foreach ($breakdown['hourly'] as $slot) {
+        if (hasHourlyUpdateInSlot($conn, $employeeId, $shiftId, $slot['slot_date'], $slot['slot_hour'])) {
+            continue;
+        }
+
+        $slotDate = mysqli_real_escape_string($conn, $slot['slot_date']);
+        $slotHour = (int) $slot['slot_hour'];
+        $createdAt = date('Y-m-d H:i:s', $slot['start_ts']);
+        $updateText = mysqli_real_escape_string(
+            $conn,
+            "[Admin relaxation] Missed slot credited by {$grantedBy} — {$slot['label']}"
+        );
+
+        $ok = $conn->query("
+            INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text, created_at)
+            VALUES ('$employeeId', '$shiftId', '$slotDate', '$slotHour', 1, '$updateText', '$createdAt')
+        ");
+
+        if ($ok) {
+            $credited++;
+        } else {
+            $errors++;
+        }
+    }
+
+    if ($credited > 0) {
+        $message = "Relaxation granted: {$credited} missed hourly slot(s) credited.";
+    } elseif ($errors > 0) {
+        $message = 'Could not credit missed slots. They may already be filled.';
+    } else {
+        $message = 'No missed hourly slots to credit for this shift.';
+    }
+
+    return [
+        'success' => $credited > 0,
+        'credited' => $credited,
+        'errors' => $errors,
+        'message' => $message,
     ];
 }
 

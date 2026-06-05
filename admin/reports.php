@@ -20,6 +20,38 @@ if (isset($_POST['recalculate_penalties'])) {
     exit();
 }
 
+if (isset($_POST['grant_hourly_relaxation'])) {
+    $grantShiftId = (int) ($_POST['shift_id'] ?? 0);
+    $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    $adminName = $_SESSION['user']['name'] ?? 'Admin';
+
+    if ($grantShiftId > 0 && $grantEmployeeId > 0) {
+        $grantResult = grantAdminRelaxationForShiftMissedHourly($conn, $grantEmployeeId, $grantShiftId, $adminName);
+        if ($grantResult['credited'] > 0) {
+            runMonthlyPenaltyAudit($conn);
+        }
+        $_SESSION['msg'] = $grantResult['message']
+            . ($grantResult['credited'] > 0 ? ' Penalties recalculated.' : '');
+    } else {
+        $_SESSION['msg'] = 'Invalid relaxation request.';
+    }
+
+    $redirect = 'dashboard.php?page=reports&employee_id=' . $grantEmployeeId;
+    if (!empty($_POST['date_from']) && !empty($_POST['date_to'])) {
+        $redirect .= '&date_from=' . urlencode($_POST['date_from']) . '&date_to=' . urlencode($_POST['date_to']);
+    }
+    if (!empty($_POST['hourly_all'])) {
+        $redirect .= '&hourly_all=1';
+    } elseif (!empty($_POST['hourly_from']) && !empty($_POST['hourly_to'])) {
+        $redirect .= '&hourly_from=' . urlencode($_POST['hourly_from']) . '&hourly_to=' . urlencode($_POST['hourly_to']);
+    }
+    if (!empty($_POST['hourly_sort']) && $_POST['hourly_sort'] === 'asc') {
+        $redirect .= '&hourly_sort=asc';
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
 $employee_id = isset($_GET['employee_id']) ? (int) $_GET['employee_id'] : 0;
 if ($employee_id < 0) {
     $employee_id = 0;
@@ -672,6 +704,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         <h2>Missed Updates — Daily Breakdown</h2>
         <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">
             Per workday shift: which 15-minute windows were missed and whether the end report was submitted.
+            Use <strong>Grant relaxation</strong> to auto-credit missed hourly slots (admin placeholder logs).
             <?php if ($dateFilterActive) { ?>
                 Use <strong>Yesterday</strong> above to audit the previous day quickly.
             <?php } ?>
@@ -686,6 +719,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     <th>Missed Slots</th>
                     <th>End Report</th>
                     <th>Total Missed</th>
+                    <th>Action</th>
                 </tr>
                 <?php if (count($missedReport['daily']) > 0) {
                     foreach ($missedReport['daily'] as $dayRow) {
@@ -725,11 +759,38 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                             ?>
                         </td>
                         <td><strong style="color: <?php echo $dayRow['total_missed'] > 0 ? 'var(--danger)' : 'var(--success)'; ?>;"><?php echo $dayRow['total_missed']; ?></strong></td>
+                        <td>
+                            <?php if ($dayRow['hourly_missed'] > 0) { ?>
+                                <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('Credit <?php echo (int) $dayRow['hourly_missed']; ?> missed hourly slot(s) for <?php echo date('d M Y', strtotime($dayRow['date'])); ?>? This adds grandfathered placeholder logs.');">
+                                    <input type="hidden" name="grant_hourly_relaxation" value="1">
+                                    <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                                    <input type="hidden" name="shift_id" value="<?php echo (int) $dayRow['shift_id']; ?>">
+                                    <?php if ($dateFilterActive) { ?>
+                                        <input type="hidden" name="date_from" value="<?php echo htmlspecialchars($date_from); ?>">
+                                        <input type="hidden" name="date_to" value="<?php echo htmlspecialchars($date_to); ?>">
+                                    <?php } ?>
+                                    <?php if ($hourlyShowAll) { ?>
+                                        <input type="hidden" name="hourly_all" value="1">
+                                    <?php } elseif ($hourlyDateFilterActive) { ?>
+                                        <input type="hidden" name="hourly_from" value="<?php echo htmlspecialchars($hourly_from); ?>">
+                                        <input type="hidden" name="hourly_to" value="<?php echo htmlspecialchars($hourly_to); ?>">
+                                    <?php } ?>
+                                    <?php if ($hourly_sort === 'asc') { ?>
+                                        <input type="hidden" name="hourly_sort" value="asc">
+                                    <?php } ?>
+                                    <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.75rem; white-space: nowrap;">
+                                        Grant relaxation
+                                    </button>
+                                </form>
+                            <?php } else { ?>
+                                <span style="color: var(--text-muted); font-size: 0.8rem;">—</span>
+                            <?php } ?>
+                        </td>
                     </tr>
                 <?php }
                 } else { ?>
                     <tr>
-                        <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">
+                        <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">
                             No shifts<?php echo $dateFilterActive ? ' in the selected date range' : ''; ?>.
                         </td>
                     </tr>

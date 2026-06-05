@@ -1,16 +1,12 @@
 <?php
 session_start();
+require_once __DIR__ . '/includes/functions.php';
 
 // If user is already logged in, redirect based on role
-if(isset($_SESSION['user'])){
-    if($_SESSION['user']['role'] == 'admin'){
-        header("Location: admin/dashboard.php");
-        exit();
-    }
-    if($_SESSION['user']['role'] == 'employee'){
-        header("Location: employee/dashboard.php");
-        exit();
-    }
+if (isset($_SESSION['user'])) {
+    $_SESSION['user']['role'] = normalizeUserRole($_SESSION['user']['role'] ?? '');
+    header('Location: ' . dashboardUrlForRole($_SESSION['user']['role']));
+    exit();
 }
 ?>
 <!DOCTYPE html>

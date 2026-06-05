@@ -1,9 +1,14 @@
 <?php
 include_once "../includes/db.php";
 include_once "../includes/auth.php";
+include_once "../includes/functions.php";
 
-if($_SESSION['user']['role'] != 'admin'){
-    header("Location: ../login.php");
+if (normalizeUserRole($_SESSION['user']['role'] ?? '') !== 'admin') {
+    if (normalizeUserRole($_SESSION['user']['role'] ?? '') === 'employee') {
+        header('Location: ../employee/dashboard.php');
+    } else {
+        header('Location: ../login.php');
+    }
     exit();
 }
 
@@ -11,7 +16,6 @@ $user = $_SESSION['user'];
 $page = isset($_GET['page']) ? $_GET['page'] : 'home';
 
 // --- PENALTY AUDIT: recalc current month on each admin visit (idempotent) ---
-include_once __DIR__ . "/../includes/functions.php";
 runMonthlyPenaltyAudit($conn);
 ?>
 <?php include "../includes/header.php"; ?>

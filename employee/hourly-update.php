@@ -51,8 +51,11 @@ if(isset($_POST['submit'])){
             $stmt->bind_param("iisis", $employee_id, $shift_id, $slot['slot_date'], $slot_hour, $update_text);
 
             if($stmt->execute()){
-                $_SESSION['msg'] = "Hourly update submitted for " . $slot['label'] . " slot.";
-                echo "<script>window.location.href='dashboard.php';</script>";
+                $_SESSION['hourly_success_popup'] = [
+                    'slot' => $slot['label'],
+                    'submitted_at' => date('h:i A - d M Y'),
+                ];
+                header('Location: dashboard.php?page=hourly-update');
                 exit();
             } else {
                 if (strpos($conn->error, 'uniq_employee_shift_slot') !== false) {
@@ -179,3 +182,44 @@ if(isset($_POST['submit'])){
 
     <?php } ?>
 </div>
+
+<?php if (isset($_SESSION['hourly_success_popup'])) {
+    $hourlyPopup = $_SESSION['hourly_success_popup'];
+    unset($_SESSION['hourly_success_popup']);
+?>
+<div id="hourly-success-modal" class="success-modal-overlay is-open" role="dialog" aria-modal="true" aria-labelledby="hourly-success-title">
+    <div class="success-modal">
+        <div class="success-modal-icon">✅</div>
+        <h3 id="hourly-success-title">Hourly Update Submitted</h3>
+        <p>
+            Your progress log for <strong><?php echo htmlspecialchars($hourlyPopup['slot']); ?></strong>
+            was saved successfully.
+        </p>
+        <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 20px;">
+            Submitted at <?php echo htmlspecialchars($hourlyPopup['submitted_at']); ?>
+        </p>
+        <button type="button" class="btn glowing-element" id="hourly-success-close">Got it</button>
+    </div>
+</div>
+<script>
+(function () {
+    var modal = document.getElementById('hourly-success-modal');
+    var closeBtn = document.getElementById('hourly-success-close');
+    function closeModal() {
+        if (modal) {
+            modal.classList.remove('is-open');
+        }
+    }
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeModal);
+    }
+    if (modal) {
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) {
+                closeModal();
+            }
+        });
+    }
+})();
+</script>
+<?php } ?>

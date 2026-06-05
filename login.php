@@ -20,6 +20,7 @@ if(isset($_POST['login'])){
 
         // Secure password verify (with plain text fallback)
         if(verifyPassword($password, $user['password'])){
+            $user['role'] = normalizeUserRole($user['role']);
             $_SESSION['user'] = $user;
 
             // Audit Login Details
@@ -50,12 +51,7 @@ if(isset($_POST['login'])){
             $logStmt->bind_param("isssss", $user['id'], $ip, $deviceStr, $locationName, $lat, $lng);
             $logStmt->execute();
 
-            // Redirect based on role
-            if($user['role'] == 'admin'){
-                header("Location: admin/dashboard.php");
-            } else {
-                header("Location: employee/dashboard.php");
-            }
+            header('Location: ' . dashboardUrlForRole($user['role']));
             exit();
         } else {
             $message = "Invalid email or password";
@@ -120,11 +116,6 @@ if(isset($_POST['login'])){
             </button>
 
         </form>
-
-        <p style="text-align: center; margin-top: 24px; font-size: 0.9rem; color: var(--text-muted);">
-            Don't have an account? <a href="register.php" style="color: var(--primary); text-decoration: none; font-weight: 600;">Register here</a>
-        </p>
-
     </div>
 
 </body>

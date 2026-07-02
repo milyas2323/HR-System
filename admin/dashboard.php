@@ -59,6 +59,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_hourly_relaxati
     exit();
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxation_date'])) {
+    $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    $absenceDate = trim($_POST['absence_date'] ?? '');
+    $adminName = $_SESSION['user']['name'] ?? 'Admin';
+
+    if ($grantEmployeeId > 0 && $absenceDate !== '') {
+        $grantResult = grantAdminRelaxationForAbsenceDate($conn, $grantEmployeeId, $absenceDate, $adminName);
+        $_SESSION['msg'] = $grantResult['message'];
+    } else {
+        $_SESSION['msg'] = 'Invalid absence relaxation request.';
+    }
+
+    $redirect = 'dashboard.php?page=reports&employee_id=' . $grantEmployeeId;
+    if (!empty($_POST['date_from']) && !empty($_POST['date_to'])) {
+        $redirect .= '&date_from=' . urlencode($_POST['date_from']) . '&date_to=' . urlencode($_POST['date_to']);
+    }
+    if (!empty($_POST['hourly_all'])) {
+        $redirect .= '&hourly_all=1';
+    } elseif (!empty($_POST['hourly_from']) && !empty($_POST['hourly_to'])) {
+        $redirect .= '&hourly_from=' . urlencode($_POST['hourly_from']) . '&hourly_to=' . urlencode($_POST['hourly_to']);
+    }
+    if (!empty($_POST['hourly_sort']) && $_POST['hourly_sort'] === 'asc') {
+        $redirect .= '&hourly_sort=asc';
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxation_month'])) {
+    $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    $penaltyMonth = trim($_POST['penalty_month'] ?? '');
+    $adminName = $_SESSION['user']['name'] ?? 'Admin';
+
+    if ($grantEmployeeId > 0 && preg_match('/^\d{4}-\d{2}$/', $penaltyMonth)) {
+        $grantResult = grantAdminRelaxationForEmployeeAbsenceMonth($conn, $grantEmployeeId, $penaltyMonth, $adminName);
+        $_SESSION['msg'] = $grantResult['message'];
+    } else {
+        $_SESSION['msg'] = 'Invalid absence relaxation request.';
+    }
+
+    $redirect = 'dashboard.php?page=reports&employee_id=' . $grantEmployeeId;
+    if (!empty($_POST['date_from']) && !empty($_POST['date_to'])) {
+        $redirect .= '&date_from=' . urlencode($_POST['date_from']) . '&date_to=' . urlencode($_POST['date_to']);
+    }
+    if (!empty($_POST['hourly_all'])) {
+        $redirect .= '&hourly_all=1';
+    } elseif (!empty($_POST['hourly_from']) && !empty($_POST['hourly_to'])) {
+        $redirect .= '&hourly_from=' . urlencode($_POST['hourly_from']) . '&hourly_to=' . urlencode($_POST['hourly_to']);
+    }
+    if (!empty($_POST['hourly_sort']) && $_POST['hourly_sort'] === 'asc') {
+        $redirect .= '&hourly_sort=asc';
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
 if ($page === 'leave-requests' && isset($_GET['action'], $_GET['id'])) {
     $leaveResult = processAdminLeaveRequestAction($conn, (int) $_GET['id'], $_GET['action']);
     $_SESSION['msg'] = $leaveResult['message'];

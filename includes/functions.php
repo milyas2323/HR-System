@@ -218,9 +218,19 @@ function processEmployeeStartShift($conn, $employeeId, $postData) {
     $result = ['success' => false, 'message' => '', 'messageType' => 'danger'];
 
     $message = mysqli_real_escape_string($conn, trim($postData['message'] ?? ''));
-    $location = mysqli_real_escape_string($conn, trim($postData['current_location'] ?? ''));
-    $latitude = mysqli_real_escape_string($conn, trim($postData['current_latitude'] ?? ''));
-    $longitude = mysqli_real_escape_string($conn, trim($postData['current_longitude'] ?? ''));
+    $location = trim($postData['current_location'] ?? '');
+    $latitude = trim($postData['current_latitude'] ?? '');
+    $longitude = trim($postData['current_longitude'] ?? '');
+    $locationAccuracy = trim($postData['location_accuracy'] ?? '');
+
+    if ($locationAccuracy !== '' && is_numeric($locationAccuracy)) {
+        $location .= ' (GPS accuracy: ~' . (int) $locationAccuracy . 'm)';
+    }
+
+    if ($latitude === '' || $longitude === '' || !is_numeric($latitude) || !is_numeric($longitude)) {
+        $result['message'] = 'Workstation location is required. Allow browser location access and try again.';
+        return $result;
+    }
 
     $check = $conn->query("SELECT id FROM shifts WHERE employee_id='$employeeId' AND status='active' LIMIT 1");
     if ($check && $check->num_rows > 0) {
@@ -867,6 +877,258 @@ function grantAdminRelaxationForShiftMissedHourly($conn, $employeeId, $shiftId, 
 }
 
 /**
+ * Whether a penalty reason is system-generated (absence / missed updates).
+ */
+function isAutomatedPenaltyReason($reason) {
+    $type = classifyPenaltyType($reason);
+    return $type['key'] !== 'manual';
+}
+
+/**
+ * Sum admin-logged penalties in a date range (excludes automated monthly rows).
+ */
+function getManualPenaltySumInRange($conn, $employeeId, $dateFrom, $dateTo) {
+    $employeeId = (int) $employeeId;
+    $dateFrom = mysqli_real_escape_string($conn, $dateFrom);
+    $dateTo = mysqli_real_escape_string($conn, $dateTo);
+    $total = 0.0;
+
+    $result = $conn->query("
+        SELECT amount, reason
+        FROM penalties
+        WHERE employee_id='$employeeId'
+        AND DATE(created_at) BETWEEN '$dateFrom' AND '$dateTo'
+    ");
+
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            if (!isAutomatedPenaltyReason($row['reason'])) {
+                $total += floatval($row['amount']);
+            }
+        }
+    }
+
+    return $total;
+}
+
+/**
+ * Real-time penalty totals from attendance rules (not stale DB rows).
+ */
+function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateTo, $auditTimestamp = null) {
+    $employeeId = (int) $employeeId;
+    $auditTimestamp = $auditTimestamp ?? getDatabaseNowTimestamp($conn);
+
+    $absenceCount = 0;
+    $absenceFine = 0.0;
+    $missedUpdatesTotal = 0;
+    $missedUpdatesFinedCount = 0;
+    $missedUpdatesFine = 0.0;
+    $byMonth = [];
+
+    $month = date('Y-m', strtotime($dateFrom));
+    $endMonth = date('Y-m', strtotime($dateTo));
+
+    while ($month <= $endMonth) {
+        $monthStart = max($dateFrom, $month . '-01');
+        $monthEnd = min($dateTo, date('Y-m-t', strtotime($month . '-01')));
+        $auditEndDate = $monthEnd;
+
+        if ($month === date('Y-m')) {
+            $yesterday = date('Y-m-d', strtotime('yesterday'));
+            if (strtotime($yesterday) >= strtotime($month . '-01')) {
+                $auditEndDate = min($monthEnd, $yesterday);
+            }
+        }
+
+        $monthAbsences = 0;
+        if (strtotime($auditEndDate) >= strtotime($month . '-01')) {
+            foreach (getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month, $auditEndDate) as $row) {
+                if (!empty($row['relaxed'])) {
+                    continue;
+                }
+                if ($row['date'] >= $monthStart && $row['date'] <= $monthEnd) {
+                    $monthAbsences++;
+                }
+            }
+        }
+
+        $monthMissed = 0;
+        foreach (getAuditableShiftsForPenaltyMonth($conn, $employeeId, $month, $auditTimestamp) as $shift) {
+            $shiftDate = date('Y-m-d', strtotime($shift['start_time']));
+            if ($shiftDate < $dateFrom || $shiftDate > $dateTo) {
+                continue;
+            }
+            $breakdown = getMissedUpdatesBreakdownForShift($conn, $employeeId, $shift, $auditTimestamp);
+            $monthMissed += $breakdown['total'];
+        }
+
+        $monthAbsenceFine = $monthAbsences * 5000;
+        $monthMissedFine = calculateMissedUpdatesFineAmount($monthMissed);
+        $monthFinedMissedCount = max(0, $monthMissed - 3);
+
+        $absenceCount += $monthAbsences;
+        $absenceFine += $monthAbsenceFine;
+        $missedUpdatesTotal += $monthMissed;
+        $missedUpdatesFinedCount += $monthFinedMissedCount;
+        $missedUpdatesFine += $monthMissedFine;
+
+        $byMonth[$month] = [
+            'absences' => $monthAbsences,
+            'absence_fine' => $monthAbsenceFine,
+            'missed_updates' => $monthMissed,
+            'missed_updates_fined_count' => $monthFinedMissedCount,
+            'missed_updates_fine' => $monthMissedFine,
+            'manual_fine' => 0.0,
+        ];
+
+        $month = date('Y-m', strtotime($month . '-01 +1 month'));
+    }
+
+    $manualFine = 0.0;
+    $manualResult = $conn->query("
+        SELECT amount, reason, created_at
+        FROM penalties
+        WHERE employee_id='$employeeId'
+        AND DATE(created_at) BETWEEN '" . mysqli_real_escape_string($conn, $dateFrom) . "'
+        AND '" . mysqli_real_escape_string($conn, $dateTo) . "'
+    ");
+    if ($manualResult) {
+        while ($row = $manualResult->fetch_assoc()) {
+            if (isAutomatedPenaltyReason($row['reason'])) {
+                continue;
+            }
+            $amount = floatval($row['amount']);
+            $manualFine += $amount;
+            $rowMonth = date('Y-m', strtotime($row['created_at']));
+            if (!isset($byMonth[$rowMonth])) {
+                $byMonth[$rowMonth] = [
+                    'absences' => 0,
+                    'absence_fine' => 0.0,
+                    'missed_updates' => 0,
+                    'missed_updates_fined_count' => 0,
+                    'missed_updates_fine' => 0.0,
+                    'manual_fine' => 0.0,
+                ];
+            }
+            $byMonth[$rowMonth]['manual_fine'] += $amount;
+        }
+    }
+
+    $automatedTotal = $absenceFine + $missedUpdatesFine;
+
+    return [
+        'total' => $automatedTotal + $manualFine,
+        'automated_total' => $automatedTotal,
+        'absence_count' => $absenceCount,
+        'absence_fine' => $absenceFine,
+        'missed_updates_total' => $missedUpdatesTotal,
+        'missed_updates_fined_count' => $missedUpdatesFinedCount,
+        'missed_updates_fine' => $missedUpdatesFine,
+        'manual_fine' => $manualFine,
+        'by_month' => $byMonth,
+    ];
+}
+
+/**
+ * Build penalty rows for reports UI from live rules + manual DB entries.
+ */
+function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, $auditTimestamp = null) {
+    $employeeId = (int) $employeeId;
+    $auditTimestamp = $auditTimestamp ?? getDatabaseNowTimestamp($conn);
+    $dynamic = calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateTo, $auditTimestamp);
+    $rows = [];
+
+    krsort($dynamic['by_month']);
+    foreach ($dynamic['by_month'] as $month => $data) {
+        if ($data['absence_fine'] > 0) {
+            $reason = "Monthly Shift Absences ({$data['absences']} missed)";
+            $rows[] = [
+                'id' => 0,
+                'reason' => $reason,
+                'amount' => $data['absence_fine'],
+                'created_at' => penaltyCreatedAtForMonth($month),
+                'type' => classifyPenaltyType($reason),
+                'penalty_month' => $month,
+                'dynamic' => true,
+            ];
+        }
+        if ($data['missed_updates_fine'] > 0) {
+            $reason = "Monthly Missed Updates ({$data['missed_updates']} missed, 3 allowed)";
+            $rows[] = [
+                'id' => 0,
+                'reason' => $reason,
+                'amount' => $data['missed_updates_fine'],
+                'created_at' => penaltyCreatedAtForMonth($month),
+                'type' => classifyPenaltyType($reason),
+                'penalty_month' => $month,
+                'dynamic' => true,
+            ];
+        }
+    }
+
+    $manualResult = $conn->query("
+        SELECT id, reason, amount, created_at
+        FROM penalties
+        WHERE employee_id='$employeeId'
+        AND DATE(created_at) BETWEEN '" . mysqli_real_escape_string($conn, $dateFrom) . "'
+        AND '" . mysqli_real_escape_string($conn, $dateTo) . "'
+        ORDER BY created_at DESC
+    ");
+    if ($manualResult) {
+        while ($row = $manualResult->fetch_assoc()) {
+            if (isAutomatedPenaltyReason($row['reason'])) {
+                continue;
+            }
+            $row['type'] = classifyPenaltyType($row['reason']);
+            $row['penalty_month'] = date('Y-m', strtotime($row['created_at']));
+            $row['dynamic'] = false;
+            $rows[] = $row;
+        }
+    }
+
+    usort($rows, function ($a, $b) {
+        return strtotime($b['created_at']) <=> strtotime($a['created_at']);
+    });
+
+    $breakdown = [
+        'absence' => [
+            'label' => 'Shift Absences',
+            'description' => 'PKR 5,000 per weekday with no shift start',
+            'count' => 0,
+            'total' => 0.0,
+        ],
+        'missed_updates' => [
+            'label' => 'Missed Updates Fines',
+            'description' => '3 free per month, then PKR 1,000 each',
+            'count' => 0,
+            'total' => 0.0,
+        ],
+        'manual' => [
+            'label' => 'Manual / Misconduct',
+            'description' => 'Logged by admin',
+            'count' => 0,
+            'total' => 0.0,
+        ],
+    ];
+    $total = 0.0;
+
+    foreach ($rows as $row) {
+        $key = $row['type']['key'];
+        $amount = floatval($row['amount']);
+        $breakdown[$key]['count']++;
+        $breakdown[$key]['total'] += $amount;
+        $total += $amount;
+    }
+
+    return [
+        'rows' => $rows,
+        'breakdown' => $breakdown,
+        'total' => $total,
+        'dynamic' => $dynamic,
+    ];
+}
+
+/**
  * Classify a penalty row for reporting (absence, missed updates, manual).
  */
 function classifyPenaltyType($reason) {
@@ -1006,6 +1268,240 @@ function getEmployeeAbsenceStartDate($conn, $userId, $monthStart) {
 }
 
 /**
+ * Whether admin granted relaxation for a weekday absence.
+ */
+function isAbsenceDateRelaxed($conn, $employeeId, $absenceDate) {
+    $employeeId = (int) $employeeId;
+    $absenceDate = mysqli_real_escape_string($conn, $absenceDate);
+    $result = $conn->query("
+        SELECT id FROM absence_relaxations
+        WHERE employee_id='$employeeId' AND absence_date='$absenceDate'
+        LIMIT 1
+    ");
+    return ($result && $result->num_rows > 0);
+}
+
+/**
+ * Weekday absence dates for a month (includes already-relaxed days).
+ */
+function getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month, $auditEndDate = null) {
+    $employeeId = (int) $employeeId;
+    $monthStart = $month . '-01';
+    $monthEnd = date('Y-m-t', strtotime($monthStart));
+
+    if ($auditEndDate === null) {
+        $auditEndDate = ($month === date('Y-m')) ? date('Y-m-d', strtotime('yesterday')) : $monthEnd;
+    }
+
+    $absenceStartDate = getEmployeeAbsenceStartDate($conn, $employeeId, $monthStart);
+    $rows = [];
+
+    if ($absenceStartDate === null || strtotime($absenceStartDate) > strtotime($auditEndDate)) {
+        return $rows;
+    }
+
+    $rangeStart = max($absenceStartDate, $monthStart);
+    $weekdays = getWeekdaysBetweenDates($rangeStart, $auditEndDate);
+
+    foreach ($weekdays as $date) {
+        $relaxed = isAbsenceDateRelaxed($conn, $employeeId, $date);
+        if ($relaxed) {
+            $rows[] = ['date' => $date, 'relaxed' => true];
+            continue;
+        }
+
+        $dateEsc = mysqli_real_escape_string($conn, $date);
+        $shiftQuery = $conn->query("
+            SELECT id FROM shifts
+            WHERE employee_id='$employeeId'
+            AND DATE(start_time)='$dateEsc'
+            LIMIT 1
+        ");
+        if ($shiftQuery && $shiftQuery->num_rows > 0) {
+            continue;
+        }
+
+        $leaveQuery = $conn->query("
+            SELECT id FROM leave_requests
+            WHERE employee_id='$employeeId'
+            AND status='approved'
+            AND '$dateEsc' BETWEEN from_date AND to_date
+            LIMIT 1
+        ");
+        if ($leaveQuery && $leaveQuery->num_rows > 0) {
+            continue;
+        }
+
+        $rows[] = ['date' => $date, 'relaxed' => false];
+    }
+
+    return $rows;
+}
+
+/**
+ * Absence dates in a calendar range (for reports breakdown).
+ */
+function getEmployeeAbsenceDatesInRange($conn, $employeeId, $dateFrom, $dateTo) {
+    $employeeId = (int) $employeeId;
+    $rows = [];
+    $month = date('Y-m', strtotime($dateFrom));
+    $endMonth = date('Y-m', strtotime($dateTo));
+
+    while ($month <= $endMonth) {
+        $monthEnd = date('Y-m-t', strtotime($month . '-01'));
+        $auditEnd = min($dateTo, $monthEnd);
+        foreach (getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month, $auditEnd) as $row) {
+            if ($row['date'] >= $dateFrom && $row['date'] <= $dateTo) {
+                $rows[] = $row;
+            }
+        }
+        $month = date('Y-m', strtotime($month . '-01 +1 month'));
+    }
+
+    usort($rows, function ($a, $b) {
+        return strcmp($b['date'], $a['date']);
+    });
+
+    return $rows;
+}
+
+/**
+ * Recalculate automated penalties for one employee and month.
+ */
+function recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, $month) {
+    $employeeId = (int) $employeeId;
+    $emp = $conn->query("SELECT * FROM users WHERE id='$employeeId' AND role='employee'")->fetch_assoc();
+    if (!$emp) {
+        return false;
+    }
+
+    $monthEsc = mysqli_real_escape_string($conn, $month);
+    $conn->query("
+        DELETE FROM penalties
+        WHERE employee_id='$employeeId'
+        AND DATE_FORMAT(created_at, '%Y-%m')='$monthEsc'
+        AND (
+            reason LIKE 'Monthly Shift Absences%'
+            OR reason LIKE 'Monthly Missed Hourly Updates%'
+            OR reason LIKE 'Monthly Missed Updates%'
+        )
+    ");
+
+    $monthEnd = date('Y-m-t', strtotime($month . '-01'));
+    $auditEndDate = ($month === date('Y-m')) ? date('Y-m-d', strtotime('yesterday')) : $monthEnd;
+
+    if (strtotime($auditEndDate) >= strtotime($month . '-01')) {
+        runMonthlyPenaltyAuditForEmployee($conn, $emp, $month, $auditEndDate);
+    }
+
+    if ($month === date('Y-m')) {
+        $sumRes = $conn->query("
+            SELECT SUM(amount) AS total
+            FROM penalties
+            WHERE employee_id='$employeeId'
+            AND DATE_FORMAT(created_at, '%Y-%m')='" . date('Y-m') . "'
+        ");
+        $totalDeductions = 0;
+        if ($sumRes) {
+            $totalDeductions = floatval($sumRes->fetch_assoc()['total'] ?? 0);
+        }
+        $conn->query("UPDATE users SET total_deduction='$totalDeductions' WHERE id='$employeeId'");
+    }
+
+    return true;
+}
+
+/**
+ * Admin: grant relaxation for one weekday absence.
+ */
+function grantAdminRelaxationForAbsenceDate($conn, $employeeId, $absenceDate, $grantedBy = 'Admin') {
+    $employeeId = (int) $employeeId;
+    $grantedBy = trim((string) $grantedBy) ?: 'Admin';
+    $grantedByEsc = mysqli_real_escape_string($conn, $grantedBy);
+    $absenceDate = trim((string) $absenceDate);
+    $ts = strtotime($absenceDate);
+
+    if ($ts === false) {
+        return ['success' => false, 'credited' => 0, 'message' => 'Invalid absence date.'];
+    }
+
+    $absenceDate = date('Y-m-d', $ts);
+    $month = date('Y-m', $ts);
+
+    if (isAbsenceDateRelaxed($conn, $employeeId, $absenceDate)) {
+        return ['success' => false, 'credited' => 0, 'message' => 'Relaxation already granted for this day.'];
+    }
+
+    $pending = getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month);
+    $isBillable = false;
+    foreach ($pending as $row) {
+        if ($row['date'] === $absenceDate && empty($row['relaxed'])) {
+            $isBillable = true;
+            break;
+        }
+    }
+
+    if (!$isBillable) {
+        return ['success' => false, 'credited' => 0, 'message' => 'This day is not a billable absence (shift exists, leave approved, or not eligible).'];
+    }
+
+    $dateEsc = mysqli_real_escape_string($conn, $absenceDate);
+    $ok = $conn->query("
+        INSERT INTO absence_relaxations (employee_id, absence_date, granted_by)
+        VALUES ('$employeeId', '$dateEsc', '$grantedByEsc')
+    ");
+
+    if (!$ok) {
+        return ['success' => false, 'credited' => 0, 'message' => 'Could not save relaxation: ' . $conn->error];
+    }
+
+    recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, $month);
+
+    return [
+        'success' => true,
+        'credited' => 1,
+        'message' => 'Relaxation granted for absence on ' . date('d M Y', $ts) . '. Penalties recalculated.',
+    ];
+}
+
+/**
+ * Admin: grant relaxation for all billable absences in a month.
+ */
+function grantAdminRelaxationForEmployeeAbsenceMonth($conn, $employeeId, $month, $grantedBy = 'Admin') {
+    $employeeId = (int) $employeeId;
+    $grantedBy = trim((string) $grantedBy) ?: 'Admin';
+    $grantedByEsc = mysqli_real_escape_string($conn, $grantedBy);
+    $credited = 0;
+
+    foreach (getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month) as $row) {
+        if (!empty($row['relaxed'])) {
+            continue;
+        }
+        $dateEsc = mysqli_real_escape_string($conn, $row['date']);
+        $ok = $conn->query("
+            INSERT INTO absence_relaxations (employee_id, absence_date, granted_by)
+            VALUES ('$employeeId', '$dateEsc', '$grantedByEsc')
+        ");
+        if ($ok) {
+            $credited++;
+        }
+    }
+
+    if ($credited > 0) {
+        recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, $month);
+        $message = "Relaxation granted: {$credited} absence day(s) waived. Penalties recalculated.";
+    } else {
+        $message = 'No billable absence days to waive for this month.';
+    }
+
+    return [
+        'success' => $credited > 0,
+        'credited' => $credited,
+        'message' => $message,
+    ];
+}
+
+/**
  * PKR fine for missed updates per monthly rules (3 free, then 1,000 each).
  */
 function calculateMissedUpdatesFineAmount($missedCount) {
@@ -1039,33 +1535,12 @@ function runMonthlyPenaltyAuditForEmployee($conn, $emp, $month, $auditEndDate) {
     $missedShiftsCount = 0;
     $absenceDates = [];
 
-    if ($absenceStartDate !== null && strtotime($absenceStartDate) <= strtotime($auditEndDate)) {
-        $weekdays = getWeekdaysBetweenDates($absenceStartDate, $auditEndDate);
-
-        foreach ($weekdays as $date) {
-            $dateEsc = mysqli_real_escape_string($conn, $date);
-            $shiftQuery = $conn->query("
-                SELECT id FROM shifts
-                WHERE employee_id='$user_id'
-                AND DATE(start_time)='$dateEsc'
-                LIMIT 1
-            ");
-
-            if ($shiftQuery && $shiftQuery->num_rows == 0) {
-                $leaveQuery = $conn->query("
-                    SELECT id FROM leave_requests
-                    WHERE employee_id='$user_id'
-                    AND status='approved'
-                    AND '$dateEsc' BETWEEN from_date AND to_date
-                    LIMIT 1
-                ");
-
-                if ($leaveQuery && $leaveQuery->num_rows == 0) {
-                    $missedShiftsCount++;
-                    $absenceDates[] = $date;
-                }
-            }
+    foreach (getEmployeeAbsenceDatesForMonth($conn, $user_id, $month, $auditEndDate) as $row) {
+        if (!empty($row['relaxed'])) {
+            continue;
         }
+        $missedShiftsCount++;
+        $absenceDates[] = $row['date'];
     }
 
     if ($missedShiftsCount > 0) {

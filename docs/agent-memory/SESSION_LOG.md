@@ -15,6 +15,13 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+### 2026-07-02 — Reports: Last month quick filter
+
+- **Scope:** `admin/reports.php`
+- **Summary:** User requested a Last month report filter on the reports page.
+- **Outcome:** Added Last month quick-filter button to main report date range and hourly history shortcuts (first day through last day of previous calendar month).
+- **Follow-ups:** None.
+
 ### 2026-06-05 — Fix false missed slots after backfill
 
 - **Scope:** `includes/functions.php`, `employee/hourly-update.php`, `employee/dashboard.php`

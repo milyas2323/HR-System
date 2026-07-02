@@ -130,10 +130,6 @@ if (isset($_SESSION['user'])) {
             Sign In to Account
         </button>
 
-        <button class="portal-btn btn-secondary" onclick="window.location.href='register.php'">
-            Register New Account
-        </button>
-
         <div class="portal-footer">
             &copy; <?php echo date("Y"); ?> Attendance System. All rights reserved.
         </div>

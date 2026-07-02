@@ -16,6 +16,8 @@ if ($employee_id < 0) {
 
 $today = date('Y-m-d');
 $yesterday = date('Y-m-d', strtotime('-1 day'));
+$lastMonthStart = date('Y-m-01', strtotime('first day of last month'));
+$lastMonthEnd = date('Y-m-t', strtotime('last day of last month'));
 $date_from_input = trim($_GET['date_from'] ?? '');
 $date_to_input = trim($_GET['date_to'] ?? '');
 $dateFilterActive = false;
@@ -235,6 +237,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         <a href="dashboard.php?page=reports<?php echo $empQ; ?>&amp;date_from=<?php echo $yesterday; ?>&amp;date_to=<?php echo $yesterday; ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Yesterday</a>
         <a href="dashboard.php?page=reports<?php echo $empQ; ?>&amp;date_from=<?php echo date('Y-m-d', strtotime('-6 days')); ?>&amp;date_to=<?php echo $today; ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Last 7 days</a>
         <a href="dashboard.php?page=reports<?php echo $empQ; ?>&amp;date_from=<?php echo date('Y-m-01'); ?>&amp;date_to=<?php echo $today; ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">This month</a>
+        <a href="dashboard.php?page=reports<?php echo $empQ; ?>&amp;date_from=<?php echo $lastMonthStart; ?>&amp;date_to=<?php echo $lastMonthEnd; ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Last month</a>
     </div>
 
     <?php if ($dateFilterError !== '') { ?>
@@ -245,7 +248,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
     <?php } elseif ($dateFilterActive) { ?>
         <div class="alert info" style="margin-top: 16px; margin-bottom: 0;">
             <span>ℹ️</span>
-            <span>Filtering shifts &amp; missed updates from <strong><?php echo date('d M Y', strtotime($date_from)); ?></strong> to <strong><?php echo date('d M Y', strtotime($date_to)); ?></strong>. Net salary uses <strong>this month</strong> penalties only.</span>
+            <span>Filtering shifts, missed updates, penalties, and net salary from <strong><?php echo date('d M Y', strtotime($date_from)); ?></strong> to <strong><?php echo date('d M Y', strtotime($date_to)); ?></strong> using live calculations.</span>
         </div>
     <?php } ?>
 
@@ -268,18 +271,8 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         }
     }
 
-    $penaltiesMonthByEmp = [];
-    $penaltyMonthResult = $conn->query("
-        SELECT employee_id, SUM(amount) AS total
-        FROM penalties
-        WHERE DATE_FORMAT(created_at, '%Y-%m')='$currentMonth'
-        GROUP BY employee_id
-    ");
-    if ($penaltyMonthResult) {
-        while ($row = $penaltyMonthResult->fetch_assoc()) {
-            $penaltiesMonthByEmp[(int) $row['employee_id']] = floatval($row['total']);
-        }
-    }
+    $overviewPenaltyFrom = ($dateFilterActive && $dateFilterError === '') ? $date_from : date('Y-m-01');
+    $overviewPenaltyTo = ($dateFilterActive && $dateFilterError === '') ? $date_to : date('Y-m-d');
 ?>
 
 <div class="card">
@@ -298,9 +291,9 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             <tr>
                 <th>Employee</th>
                 <th>Total Shifts</th>
-                <th>Billable Missed Updates</th>
-                <th>Penalty (<?php echo date('M Y'); ?>)</th>
-                <th>Net Salary (<?php echo date('M Y'); ?>)</th>
+                <th>Missed Updates</th>
+                <th>Penalty (<?php echo htmlspecialchars($reportPeriodLabel); ?>)</th>
+                <th>Net Salary (<?php echo htmlspecialchars($reportPeriodLabel); ?>)</th>
                 <th>Action</th>
             </tr>
             <?php
@@ -309,9 +302,10 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     $eid = (int) $emp['id'];
                     $shifts = reportsFetchEmployeeShifts($conn, $eid, $dateFilterActive, $date_from, $date_to);
                     $totalShifts = count($shifts);
-                    $missedStats = countBillableMissedUpdatesForShifts($conn, $eid, $shifts, $dbNowTs);
-                    $totalMissed = $missedStats['billable'];
-                    $monthPenalty = $penaltiesMonthByEmp[$eid] ?? 0;
+                    $penaltyData = calculateEmployeeDynamicPenalties($conn, $eid, $overviewPenaltyFrom, $overviewPenaltyTo, $dbNowTs);
+                    $totalMissed = $penaltyData['missed_updates_total'];
+                    $finedMissed = $penaltyData['missed_updates_fined_count'];
+                    $monthPenalty = $penaltyData['total'];
                     $grossSalary = floatval($emp['salary']);
                     $netSalary = max(0, $grossSalary - $monthPenalty);
                     $detailUrl = reportsDetailUrl($eid, $dateFilterActive ? $date_from : '', $dateFilterActive ? $date_to : '');
@@ -326,11 +320,16 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                         <span class="badge <?php echo $totalMissed > 0 ? 'danger' : 'success'; ?>">
                             <?php echo $totalMissed; ?> missed
                         </span>
+                        <?php if ($finedMissed > 0) { ?>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                                <?php echo $finedMissed; ?> fined after 3 free/mo
+                            </div>
+                        <?php } ?>
                     </td>
                     <td style="color: var(--danger); font-weight: 600;">PKR <?php echo number_format($monthPenalty); ?></td>
                     <td>
                         <div style="font-weight: 700; color: var(--success);">PKR <?php echo number_format($netSalary); ?></div>
-                        <div style="font-size: 0.75rem; color: var(--text-muted);">Gross <?php echo number_format($grossSalary); ?> − this month</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Gross <?php echo number_format($grossSalary); ?> − <?php echo htmlspecialchars($reportPeriodLabel); ?></div>
                     </td>
                     <td>
                         <a href="<?php echo htmlspecialchars($detailUrl); ?>" class="btn" style="padding: 8px 14px; font-size: 0.85rem; text-decoration: none;">
@@ -362,16 +361,20 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         $missedCounts = countBillableMissedUpdatesForShifts($conn, $employee_id, $employeeShifts, $dbNowTs);
 
         $totalPenaltyAllTime = reportsGetPenaltySum($conn, $employee_id);
-        $totalPenaltyMonth = reportsGetPenaltySum($conn, $employee_id, $currentMonth);
+        $thisMonthFrom = date('Y-m-01');
+        $thisMonthTo = date('Y-m-d');
+        $thisMonthPenaltyData = calculateEmployeeDynamicPenalties($conn, $employee_id, $thisMonthFrom, $thisMonthTo, $dbNowTs);
+        $totalPenaltyMonth = $thisMonthPenaltyData['total'];
         $grossSalary = floatval($empDetails['salary']);
         $netSalary = max(0, $grossSalary - $totalPenaltyMonth);
 
-        // Billable missed updates for current month (same rules as penalty engine)
+        // Live missed-update totals for current month (same rules as penalty engine)
         $currentMonthShifts = reportsFetchEmployeeShifts($conn, $employee_id, true, date('Y-m-01'), date('Y-m-t'));
         $currentMonthMissedCounts = countBillableMissedUpdatesForShifts($conn, $employee_id, $currentMonthShifts, $dbNowTs);
-        $billableMonthMissed = $currentMonthMissedCounts['billable'];
+        $billableMonthMissed = $thisMonthPenaltyData['missed_updates_total'];
+        $finedMissedCount = $thisMonthPenaltyData['missed_updates_fined_count'];
         $pendingMonthMissed = $currentMonthMissedCounts['pending'];
-        $expectedMissedFine = calculateMissedUpdatesFineAmount($billableMonthMissed);
+        $expectedMissedFine = $thisMonthPenaltyData['missed_updates_fine'];
 
         $shiftActive = $conn->query("
             SELECT COUNT(*) as total FROM shifts
@@ -537,7 +540,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
     <div class="card" style="border-color: rgba(239, 68, 68, 0.25);">
         <h2>Penalty Breakdown</h2>
         <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
-            Fines stored in the database. <strong>Missed updates</strong> above are an audit count only.
+            Penalties below are computed <strong>live</strong> from shifts, missed slots, end reports, approved leaves, and relaxations.
             Absences are charged PKR 5,000 per weekday <em>after the employee’s first clock-in</em> (not before join).
             Missed-update fines: 3 free/month, then PKR 1,000 each.
         </p>
@@ -553,10 +556,11 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             <span><?php echo ($expectedMissedFine > 0 && $totalPenaltyMonth < $expectedMissedFine) ? '⚠️' : 'ℹ️'; ?></span>
             <span>
                 <strong><?php echo date('F Y'); ?>:</strong>
-                <?php echo $billableMonthMissed; ?> billable missed update(s) →
+                <?php echo $billableMonthMissed; ?> total missed update(s)
+                (<?php echo $finedMissedCount; ?> fined after 3 free) →
                 fine <strong>PKR <?php echo number_format($expectedMissedFine); ?></strong>
-                (stored this month: <strong>PKR <?php echo number_format($totalPenaltyMonth); ?></strong> total penalties).
-                Penalties refresh automatically when you open this page.
+                (live total penalties this month: <strong>PKR <?php echo number_format($totalPenaltyMonth); ?></strong>).
+                Values refresh every page load.
             </span>
         </div>
 
@@ -802,6 +806,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             <a href="<?php echo htmlspecialchars($hourlyHistoryBaseUrl . '&hourly_from=' . $yesterday . '&hourly_to=' . $yesterday . $hourlySortParam); ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Yesterday</a>
             <a href="<?php echo htmlspecialchars($hourlyHistoryBaseUrl . '&hourly_from=' . date('Y-m-d', strtotime('-6 days')) . '&hourly_to=' . $today . $hourlySortParam); ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Last 7 days</a>
             <a href="<?php echo htmlspecialchars($hourlyHistoryBaseUrl . '&hourly_from=' . date('Y-m-01') . '&hourly_to=' . $today . $hourlySortParam); ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">This month</a>
+            <a href="<?php echo htmlspecialchars($hourlyHistoryBaseUrl . '&hourly_from=' . $lastMonthStart . '&hourly_to=' . $lastMonthEnd . $hourlySortParam); ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Last month</a>
             <a href="<?php echo htmlspecialchars($hourlyHistoryBaseUrl . '&hourly_all=1' . $hourlySortParam); ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">Show all</a>
         </div>
 

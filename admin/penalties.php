@@ -6,6 +6,22 @@ if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
 }
 
+$currentMonth = date('Y-m');
+$previousMonth = date('Y-m', strtotime('first day of last month'));
+$monthInput = trim($_GET['month'] ?? '');
+$selectedMonth = $currentMonth;
+
+if ($monthInput !== '') {
+    if (preg_match('/^\d{4}-\d{2}$/', $monthInput)) {
+        $selectedMonth = $monthInput;
+    }
+}
+
+$selectedMonthEsc = mysqli_real_escape_string($conn, $selectedMonth);
+$displayMonth = date('F Y', strtotime($selectedMonth . '-01'));
+$isCurrentMonth = ($selectedMonth === $currentMonth);
+$isPreviousMonth = ($selectedMonth === $previousMonth);
+
 /* TOTAL CAPACITY STATISTICS */
 $totalSalary = $conn->query("
     SELECT SUM(salary) as total 
@@ -16,6 +32,7 @@ $totalSalary = $conn->query("
 $totalDeduction = $conn->query("
     SELECT SUM(amount) as total 
     FROM penalties
+    WHERE DATE_FORMAT(created_at, '%Y-%m') = '$selectedMonthEsc'
 ")->fetch_assoc();
 
 $grossSalary = $totalSalary['total'] ?? 0;
@@ -25,27 +42,49 @@ $netSalary = $grossSalary - $totalPenalty;
 
 <div class="page-title">Salaries & Deductions Auditor</div>
 
+<!-- MONTH FILTER -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="form-group" style="margin-bottom: 0;">
+        <label>Payout month</label>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+            <a href="dashboard.php?page=penalties&amp;month=<?php echo $currentMonth; ?>" class="badge <?php echo $isCurrentMonth ? 'success' : 'warning'; ?>" style="text-decoration: none; padding: 8px 14px;">Current month</a>
+            <a href="dashboard.php?page=penalties&amp;month=<?php echo $previousMonth; ?>" class="badge <?php echo $isPreviousMonth ? 'success' : 'warning'; ?>" style="text-decoration: none; padding: 8px 14px;">Previous month</a>
+            <form method="GET" action="dashboard.php" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0;">
+                <input type="hidden" name="page" value="penalties">
+                <input type="month" name="month" value="<?php echo htmlspecialchars($selectedMonth); ?>" style="max-width: 180px;">
+                <button type="submit" class="btn glowing-element" style="padding: 8px 14px; margin: 0;">Apply</button>
+            </form>
+        </div>
+    </div>
+    <div class="alert info" style="margin-top: 14px; margin-bottom: 0;">
+        <span>ℹ️</span>
+        <span>Showing payroll for <strong><?php echo htmlspecialchars($displayMonth); ?></strong>. View Payslip opens the same month.</span>
+    </div>
+</div>
+
 <!-- PAYROLL OVERVIEW STATS -->
 <div class="summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 24px; margin-bottom: 30px;">
     <div class="card stat-box" style="margin-bottom: 0;">
         <h4>Gross Payout Base</h4>
         <h2 style="color: var(--accent);">PKR <?php echo number_format($grossSalary); ?></h2>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Contract salaries (all employees)</p>
     </div>
 
     <div class="card stat-box" style="margin-bottom: 0; border-bottom: 4px solid var(--danger);">
-        <h4>Cumulative Fines</h4>
+        <h4>Fines (<?php echo htmlspecialchars($displayMonth); ?>)</h4>
         <h2 style="color: var(--danger);">PKR <?php echo number_format($totalPenalty); ?></h2>
     </div>
 
     <div class="card stat-box" style="margin-bottom: 0; border-bottom: 4px solid var(--success);">
         <h4>Net Payout Pool</h4>
         <h2 style="color: var(--success);">PKR <?php echo number_format($netSalary); ?></h2>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Gross − <?php echo htmlspecialchars($displayMonth); ?> fines</p>
     </div>
 </div>
 
 <!-- PAYROLL AUDIT LIST -->
 <div class="card">
-    <h2>Monthly Employee Payout Sheet</h2>
+    <h2>Monthly Employee Payout Sheet — <?php echo htmlspecialchars($displayMonth); ?></h2>
 
     <div class="table-box">
         <table>
@@ -63,6 +102,7 @@ $netSalary = $grossSalary - $totalPenalty;
                     COALESCE(SUM(p.amount), 0) AS total_deduction
                 FROM users u
                 LEFT JOIN penalties p ON u.id = p.employee_id
+                    AND DATE_FORMAT(p.created_at, '%Y-%m') = '$selectedMonthEsc'
                 WHERE u.role='employee'
                 GROUP BY u.id, u.name, u.email, u.salary
                 ORDER BY u.name ASC
@@ -93,7 +133,7 @@ $netSalary = $grossSalary - $totalPenalty;
                     </td>
 
                     <td>
-                        <a href="dashboard.php?page=salary-slip&employee_id=<?php echo $row['id']; ?>" class="btn" style="padding: 6px 12px; font-size: 0.8rem; background: linear-gradient(135deg, var(--accent) 0%, #0891b2 100%); box-shadow: none;">
+                        <a href="dashboard.php?page=salary-slip&amp;employee_id=<?php echo $row['id']; ?>&amp;month=<?php echo urlencode($selectedMonth); ?>" class="btn" style="padding: 6px 12px; font-size: 0.8rem; background: linear-gradient(135deg, var(--accent) 0%, #0891b2 100%); box-shadow: none;">
                             📄 View Payslip
                         </a>
                     </td>

@@ -15,6 +15,13 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+### 2026-07-02 — Payroll month filter + payslip sync
+
+- **Scope:** `admin/penalties.php`, `admin/salary-slip.php`
+- **Summary:** Salaries page showed all-time penalties while payslip always used current month; View Payslip did not match payroll list.
+- **Outcome:** Added month filter (Current month, Previous month, custom month picker) on penalties page; filtered stats and payout sheet by month; View Payslip passes selected month; payslip reads month param and shows same deductions; back link preserves month.
+- **Follow-ups:** Upload both files to live.
+
 ### 2026-07-02 — Reports: Last month quick filter
 
 - **Scope:** `admin/reports.php`

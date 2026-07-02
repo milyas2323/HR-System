@@ -12,8 +12,21 @@ if(!isset($_GET['employee_id'])){
 }
 
 $employee_id = intval($_GET['employee_id']);
-$current_month = date('Y-m');
-$display_month = date('F Y');
+$currentMonth = date('Y-m');
+$previousMonth = date('Y-m', strtotime('first day of last month'));
+$monthInput = trim($_GET['month'] ?? '');
+$selectedMonth = $currentMonth;
+
+if ($monthInput !== '') {
+    if (preg_match('/^\d{4}-\d{2}$/', $monthInput)) {
+        $selectedMonth = $monthInput;
+    }
+}
+
+$selectedMonthEsc = mysqli_real_escape_string($conn, $selectedMonth);
+$display_month = date('F Y', strtotime($selectedMonth . '-01'));
+$isCurrentMonth = ($selectedMonth === $currentMonth);
+$isPreviousMonth = ($selectedMonth === $previousMonth);
 
 // Fetch Employee Details
 $empRes = $conn->query("SELECT * FROM users WHERE id='$employee_id' AND role='employee' LIMIT 1");
@@ -30,7 +43,7 @@ $salary = floatval($emp['salary']);
 $penaltiesRes = $conn->query("
     SELECT * FROM penalties 
     WHERE employee_id='$employee_id' 
-    AND DATE_FORMAT(created_at, '%Y-%m')='$current_month'
+    AND DATE_FORMAT(created_at, '%Y-%m')='$selectedMonthEsc'
     ORDER BY id DESC
 ");
 
@@ -203,6 +216,22 @@ $net_salary = $salary - $total_deductions;
     }
 </style>
 
+<div class="card" style="max-width: 800px; margin: 0 auto 20px;">
+    <div class="form-group" style="margin-bottom: 0;">
+        <label>Payslip month</label>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+            <a href="dashboard.php?page=salary-slip&amp;employee_id=<?php echo $employee_id; ?>&amp;month=<?php echo $currentMonth; ?>" class="badge <?php echo $isCurrentMonth ? 'success' : 'warning'; ?>" style="text-decoration: none; padding: 8px 14px;">Current month</a>
+            <a href="dashboard.php?page=salary-slip&amp;employee_id=<?php echo $employee_id; ?>&amp;month=<?php echo $previousMonth; ?>" class="badge <?php echo $isPreviousMonth ? 'success' : 'warning'; ?>" style="text-decoration: none; padding: 8px 14px;">Previous month</a>
+            <form method="GET" action="dashboard.php" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0;">
+                <input type="hidden" name="page" value="salary-slip">
+                <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                <input type="month" name="month" value="<?php echo htmlspecialchars($selectedMonth); ?>" style="max-width: 180px;">
+                <button type="submit" class="btn glowing-element" style="padding: 8px 14px; margin: 0;">Apply</button>
+            </form>
+        </div>
+    </div>
+</div>
+
 <div class="card payslip-container">
     
     <!-- PAYSLIP HEADER -->
@@ -226,7 +255,7 @@ $net_salary = $salary - $total_deductions;
         </div>
         <div class="meta-group">
             <h4>Payslip Details</h4>
-            <p>Deduction Cycle: <strong>Current Month Active</strong></p>
+            <p>Deduction Cycle: <strong><?php echo htmlspecialchars($display_month); ?></strong></p>
             <p>Slip Date: <strong><?php echo date('d M Y'); ?></strong></p>
             <p>Payment Mode: <strong>Bank Transfer</strong></p>
         </div>
@@ -304,7 +333,7 @@ $net_salary = $salary - $total_deductions;
 
     <!-- ACTION CONTROLS -->
     <div class="action-controls">
-        <a href="dashboard.php?page=penalties" class="btn btn-secondary">
+        <a href="dashboard.php?page=penalties&amp;month=<?php echo urlencode($selectedMonth); ?>" class="btn btn-secondary">
             ⬅️ Back to Payroll
         </a>
         <button onclick="window.print()" class="glowing-element">

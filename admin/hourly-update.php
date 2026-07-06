@@ -180,9 +180,12 @@ $hasCustomFilters = !$dateFilterDefault || $employee_id > 0;
         </div>
     </form>
 
-    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center;">
         <a href="dashboard.php?page=hourly-update&amp;date_from=<?php echo $currentMonthStart; ?>&amp;date_to=<?php echo $today; ?><?php echo $empQ; ?>" class="badge <?php echo $isCurrentMonth ? 'success' : 'warning'; ?>" style="text-decoration: none; padding: 8px 14px;">Current month</a>
         <a href="dashboard.php?page=hourly-update&amp;date_from=<?php echo $lastMonthStart; ?>&amp;date_to=<?php echo $lastMonthEnd; ?><?php echo $empQ; ?>" class="badge <?php echo $isLastMonth ? 'success' : 'warning'; ?>" style="text-decoration: none; padding: 8px 14px;">Last month</a>
+        <a href="dashboard.php?page=hourly-submit<?php echo $employee_id > 0 ? '&amp;employee_id=' . $employee_id : ''; ?>" class="btn glowing-element" style="padding: 8px 14px; margin-left: auto;">
+            ➕ Submit Update for Employee
+        </a>
     </div>
 
     <?php if ($dateFilterError !== '') { ?>

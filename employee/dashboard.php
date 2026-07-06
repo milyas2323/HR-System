@@ -32,7 +32,7 @@ $checkinMessageType = 'danger';
 
 // Form POST handlers must run before any HTML output (sub-pages are included later).
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if ($page === 'hourly-update' && isset($_POST['submit'])) {
+    if ($page === 'hourly-update' && (isset($_POST['submit']) || (isset($_POST['hourly_update']) && $_POST['hourly_update'] === '1'))) {
         $submitResult = processEmployeeHourlyUpdateSubmission(
             $conn,
             (int) $user['id'],

@@ -38,3 +38,7 @@ ALTER TABLE hourly_updates ADD COLUMN ip_address VARCHAR(45) DEFAULT NULL AFTER 
 ALTER TABLE hourly_updates ADD COLUMN device VARCHAR(255) DEFAULT NULL AFTER ip_address;
 ALTER TABLE hourly_updates ADD COLUMN current_location TEXT DEFAULT NULL AFTER device;
 
+-- 7. Admin-only hourly check entries (hidden from feeds and penalty logic)
+ALTER TABLE hourly_updates ADD COLUMN is_admin_check TINYINT(1) NOT NULL DEFAULT 0 AFTER is_grandfathered;
+ALTER TABLE hourly_updates ADD COLUMN admin_submitted_by INT DEFAULT NULL AFTER is_admin_check;
+

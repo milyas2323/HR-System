@@ -134,6 +134,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_attendance'])) 
     exit();
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'hourly-submit' && isset($_POST['admin_hourly_check'])) {
+    $slotKey = trim($_POST['slot_key'] ?? '');
+    $slotDate = '';
+    $slotHour = 0;
+    if (preg_match('/^(\d{4}-\d{2}-\d{2})\|(\d{1,2})$/', $slotKey, $m)) {
+        $slotDate = $m[1];
+        $slotHour = (int) $m[2];
+    }
+
+    $submitResult = processAdminHourlyUpdateSubmission(
+        $conn,
+        (int) ($user['id'] ?? 0),
+        (int) ($_POST['employee_id'] ?? 0),
+        $slotDate,
+        $slotHour,
+        $_POST['update_text'] ?? ''
+    );
+
+    $_SESSION['hourly_submit_msg'] = $submitResult['message'];
+    $_SESSION['hourly_submit_msg_type'] = $submitResult['messageType'];
+    $redirectEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    header('Location: dashboard.php?page=hourly-submit' . ($redirectEmployeeId > 0 ? '&employee_id=' . $redirectEmployeeId : ''));
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'misconduct-penalty' && isset($_POST['submit'])) {
     $penaltyResult = processAdminMisconductPenalty(
         $conn,
@@ -179,7 +204,7 @@ runMonthlyPenaltyAudit($conn);
         <a class="<?php echo ($page=='attendance') ? 'active-page' : ''; ?>" href="dashboard.php?page=attendance">
             <span>⏰</span> Attendance Logs
         </a>
-        <a class="<?php echo ($page=='hourly-update') ? 'active-page' : ''; ?>" href="dashboard.php?page=hourly-update">
+        <a class="<?php echo ($page=='hourly-update' || $page=='hourly-submit') ? 'active-page' : ''; ?>" href="dashboard.php?page=hourly-update">
             <span>📝</span> Hourly Updates
         </a>
         <a class="<?php echo ($page=='penalties') ? 'active-page' : ''; ?>" href="dashboard.php?page=penalties">
@@ -297,6 +322,7 @@ runMonthlyPenaltyAudit($conn);
         if($page == 'employees') include "employees.php";
         elseif($page == 'attendance') include "attendance.php";
         elseif($page == 'hourly-update') include "hourly-update.php";
+        elseif($page == 'hourly-submit') include "hourly-submit.php";
         elseif($page == 'penalties') include "penalties.php";
         elseif($page == 'reports') include "reports.php";
         elseif($page == 'leave-requests') include "leave-requests.php";

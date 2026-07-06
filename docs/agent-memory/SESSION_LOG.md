@@ -15,6 +15,29 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+---
+
+### 2026-07-06 — Admin hourly submit: normal visible updates
+
+- **Scope:** `includes/functions.php`, `admin/hourly-submit.php`, `admin/hourly-update.php`, `employee/dashboard.php`, `admin/reports.php`, `admin/dashboard.php`
+- **Summary:** User did not want hidden `is_admin_check` rows; admin submissions should be real employee hourly updates.
+- **Outcome:** Admin submit now inserts normal hourly_updates linked to employee active shift; visible in feeds; counts for missed-slot logic; no time window; `admin_submitted_by` kept for audit only.
+- **Follow-ups:** Re-upload touched files to live.
+
+### 2026-07-06 — Admin hourly check submit (hidden test entries)
+
+- **Scope:** `admin/hourly-submit.php`, `admin/hourly-update.php`, `admin/dashboard.php`, `includes/functions.php`, `includes/db.php`, `employee/dashboard.php`, `admin/reports.php`
+- **Summary:** User wanted admin to submit/check hourly updates without time window; entries hidden from all feeds and assigned to admin in DB.
+- **Outcome:** Added Submit Check Update button on admin hourly page; new admin submit form (employee-like, no time/location rules); `is_admin_check` + `admin_submitted_by` columns; excluded from listings, reports, and `hasHourlyUpdateInSlot` penalty logic.
+- **Follow-ups:** Upload all touched files to live.
+
+### 2026-07-06 — Fix hourly submit after location granted
+
+- **Scope:** `employee/hourly-update.php`, `employee/dashboard.php`, `includes/functions.php`
+- **Summary:** Hourly updates still not saving after location permission granted.
+- **Outcome:** Fixed JS programmatic `form.submit()` omitting POST `submit` flag; added hidden `hourly_update` marker; use `requestSubmit` after location check; server accepts coordinates-only location text built from lat/lng.
+- **Follow-ups:** Upload all three files to live.
+
 ### 2026-07-06 — Require location for hourly updates
 
 - **Scope:** `employee/hourly-update.php`, `includes/functions.php`, `includes/db.php`

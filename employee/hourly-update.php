@@ -131,6 +131,7 @@ if ($activeShift) {
             </div>
             <?php } ?>
 
+            <input type="hidden" name="hourly_update" value="1">
             <input type="hidden" name="current_location" id="hourly_current_location" value="">
             <input type="hidden" name="current_latitude" id="hourly_current_latitude" value="">
             <input type="hidden" name="current_longitude" id="hourly_current_longitude" value="">
@@ -170,6 +171,7 @@ if ($activeShift) {
     var form = document.getElementById("hourlyUpdateForm");
     var submitBtn = document.getElementById("hourlySubmitBtn");
     var submitting = false;
+    var allowNativeSubmit = false;
 
     function updateSubmitState() {
         if (!submitBtn) {
@@ -296,7 +298,11 @@ if ($activeShift) {
 
     if (form) {
         form.addEventListener('submit', function (e) {
+            if (allowNativeSubmit) {
+                return;
+            }
             if (submitting) {
+                e.preventDefault();
                 return;
             }
             e.preventDefault();
@@ -320,13 +326,14 @@ if ($activeShift) {
                     return;
                 }
                 if (!locationField.value || locationField.value === 'Unknown Location') {
-                    submitting = false;
-                    state.error = 'Location is still loading. Wait a moment and try again.';
-                    renderBadge();
-                    alert('Location is still loading. Please wait until your address appears, then submit again.');
-                    return;
+                    locationField.value = 'Lat: ' + state.lat + ', Lng: ' + state.lng;
                 }
-                form.submit();
+                allowNativeSubmit = true;
+                if (typeof form.requestSubmit === 'function') {
+                    form.requestSubmit(submitBtn);
+                } else {
+                    form.submit();
+                }
             });
         });
     }

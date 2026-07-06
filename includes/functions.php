@@ -72,10 +72,7 @@ function validateHourlyUpdateLocationSubmission($postData) {
     }
 
     if ($location === '' || strcasecmp($location, 'Unknown Location') === 0) {
-        return [
-            'valid' => false,
-            'message' => 'Location is still loading or unavailable. Wait for your location to appear, then submit.',
-        ];
+        $location = 'Lat: ' . $latitude . ', Lng: ' . $longitude;
     }
 
     if ($accuracy !== '' && is_numeric($accuracy)) {
@@ -168,6 +165,99 @@ function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText, 
         $result['message'] = 'Database Error: ' . $conn->error;
     }
 
+    return $result;
+}
+
+/**
+ * Admin submits an hourly update on behalf of an employee (no time-window check).
+ */
+function processAdminHourlyUpdateSubmission($conn, $adminId, $employeeId, $slotDate, $slotHour, $updateText) {
+    $adminId = (int) $adminId;
+    $employeeId = (int) $employeeId;
+    $slotHour = (int) $slotHour;
+    $updateText = trim((string) $updateText);
+    $slotDate = trim((string) $slotDate);
+    $result = [
+        'success' => false,
+        'message' => '',
+        'messageType' => 'danger',
+    ];
+
+    if ($employeeId <= 0) {
+        $result['message'] = 'Please select an employee.';
+        return $result;
+    }
+
+    if ($updateText === '') {
+        $result['message'] = 'Please enter update text.';
+        return $result;
+    }
+
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $slotDate)) {
+        $result['message'] = 'Invalid slot date.';
+        return $result;
+    }
+
+    $empRes = $conn->query("SELECT id, name FROM users WHERE id='$employeeId' AND role='employee' LIMIT 1");
+    if (!$empRes || $empRes->num_rows === 0) {
+        $result['message'] = 'Employee not found.';
+        return $result;
+    }
+    $employee = $empRes->fetch_assoc();
+
+    if (!$activeShift) {
+        $result['message'] = 'This employee has no active shift. Start a shift first, then submit the hourly update.';
+        return $result;
+    }
+
+    $shiftId = (int) $activeShift['id'];
+    $slots = getHourlySlotDefinitionsForShift($activeShift['start_time']);
+    $slotValid = false;
+    $slotLabel = '';
+    foreach ($slots as $slot) {
+        if ($slot['slot_date'] === $slotDate && (int) $slot['slot_hour'] === $slotHour) {
+            $slotValid = true;
+            $slotLabel = $slot['label'];
+            break;
+        }
+    }
+
+    if (!$slotValid) {
+        $result['message'] = 'Invalid hourly slot selected for this employee\'s active shift.';
+        return $result;
+    }
+
+    if (hasHourlyUpdateInSlot($conn, $employeeId, $shiftId, $slotDate, $slotHour)) {
+        $result['message'] = 'This slot already has an update for ' . $employee['name'] . '.';
+        return $result;
+    }
+
+    $adminUser = $conn->query("SELECT name FROM users WHERE id='$adminId' LIMIT 1")->fetch_assoc();
+    $adminName = $adminUser['name'] ?? 'Admin';
+    $deviceLabel = 'Admin submission by ' . $adminName;
+
+    $stmt = $conn->prepare("
+        INSERT INTO hourly_updates (
+            employee_id, shift_id, slot_date, slot_hour, is_grandfathered, admin_submitted_by,
+            update_text, ip_address, device, current_location
+        ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+    ");
+    $submitIp = getUserIP();
+    $locationNote = 'Submitted by admin';
+    $stmt->bind_param('iisiissss', $employeeId, $shiftId, $slotDate, $slotHour, $adminId, $updateText, $submitIp, $deviceLabel, $locationNote);
+
+    if ($stmt->execute()) {
+        $result['success'] = true;
+        $result['messageType'] = 'success';
+        $result['message'] = 'Hourly update saved for ' . $employee['name'] . ' (' . $slotLabel . ').';
+        return $result;
+    }
+
+    if (strpos($conn->error, 'uniq_employee_shift_slot') !== false) {
+        $result['message'] = 'Duplicate blocked: this slot already has an update.';
+    } else {
+        $result['message'] = 'Database error: ' . $conn->error;
+    }
     return $result;
 }
 

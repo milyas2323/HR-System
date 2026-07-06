@@ -164,3 +164,10 @@ Append-only log of significant work. Newest entries at the **top**.
 - **Summary:** User asked to understand the project and add persistent in-repo memory for future Cursor sessions.
 - **Outcome:** Created memory layout (overview, session log, decisions, known issues) and an always-on Cursor rule to read/update these files. Documented architecture from codebase review (PHP/MySQL attendance app, geofencing, hourly slots, penalty cron).
 - **Follow-ups:** Append a new log entry after each future agent session that changes code or fixes bugs.
+
+### 2026-07-06 — Employee dashboard: payslip links + missed updates title
+
+- **Scope:** `employee/dashboard.php`, `employee/salary-slip.php`
+- **Summary:** User requested smaller font for Missed Updates card title and Previous Months Salary Slip section at very top of home dashboard.
+- **Outcome:** Added top card with last 6 months + current month payslip links; reduced Missed Updates heading/count font sizes; employee salary-slip accepts `?month=YYYY-MM` with back link.
+- **Follow-ups:** None.

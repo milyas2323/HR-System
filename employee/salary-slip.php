@@ -9,18 +9,28 @@ if($_SESSION['user']['role'] != 'employee'){
 
 $user = $_SESSION['user'];
 $employee_id = $user['id'];
-$current_month = date('Y-m');
-$display_month = date('F Y');
+$currentMonth = date('Y-m');
+$monthInput = trim($_GET['month'] ?? '');
+$selectedMonth = $currentMonth;
+
+if ($monthInput !== '') {
+    if (preg_match('/^\d{4}-\d{2}$/', $monthInput)) {
+        $selectedMonth = $monthInput;
+    }
+}
+
+$selectedMonthEsc = mysqli_real_escape_string($conn, $selectedMonth);
+$display_month = date('F Y', strtotime($selectedMonth . '-01'));
 
 // Refresh salary from DB
 $refresh = $conn->query("SELECT * FROM users WHERE id='$employee_id' LIMIT 1")->fetch_assoc();
 $salary = floatval($refresh['salary']);
 
-// Get all active penalties for this month
+// Get penalties for selected month
 $penaltiesRes = $conn->query("
     SELECT * FROM penalties 
     WHERE employee_id='$employee_id' 
-    AND DATE_FORMAT(created_at, '%Y-%m')='$current_month'
+    AND DATE_FORMAT(created_at, '%Y-%m')='$selectedMonthEsc'
     ORDER BY id DESC
 ");
 
@@ -215,7 +225,7 @@ $net_salary = $salary - $total_deductions;
         </div>
         <div class="meta-group">
             <h4>Payslip Details</h4>
-            <p>Deduction Cycle: <strong>Current Month Active</strong></p>
+            <p>Deduction Cycle: <strong><?php echo htmlspecialchars($display_month); ?></strong></p>
             <p>Slip Date: <strong><?php echo date('d M Y'); ?></strong></p>
             <p>Payment Mode: <strong>Bank Transfer</strong></p>
         </div>
@@ -292,7 +302,10 @@ $net_salary = $salary - $total_deductions;
     </div>
 
     <!-- ACTION CONTROLS -->
-    <div class="print-btn-container">
+    <div class="print-btn-container" style="justify-content: space-between; align-items: center;">
+        <a href="dashboard.php" class="btn-secondary" style="display: inline-flex; align-items: center; padding: 10px 16px; text-decoration: none;">
+            ⬅️ Back to Dashboard
+        </a>
         <button onclick="window.print()" class="glowing-element">
             🖨️ Print / Download Slip (PDF)
         </button>

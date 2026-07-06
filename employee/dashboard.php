@@ -179,6 +179,15 @@ foreach ($missedReport['monthly'] as $monthRow) {
 }
 $expectedMissedFine = calculateMissedUpdatesFineAmount($missedCounts['billable']);
 
+$previousPayslipMonths = [];
+for ($i = 1; $i <= 6; $i++) {
+    $monthKey = date('Y-m', strtotime('first day of -' . $i . ' month'));
+    $previousPayslipMonths[] = [
+        'key' => $monthKey,
+        'label' => date('F Y', strtotime($monthKey . '-01')),
+    ];
+}
+
 /* HOURLY LOG HISTORY (default: yesterday + today) */
 $today = date('Y-m-d');
 $yesterday = date('Y-m-d', strtotime('-1 day'));
@@ -310,6 +319,23 @@ if ($hourlyShowAll) {
 <!-- MAIN CONTENT -->
 <div class="main">
 
+    <?php if($page == 'home'){ ?>
+        <!-- PREVIOUS MONTHS SALARY SLIP -->
+        <div class="card" style="margin-bottom: 20px;">
+            <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 12px;">Previous Months Salary Slip</h2>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                <?php foreach ($previousPayslipMonths as $payslipMonth) { ?>
+                    <a href="dashboard.php?page=salary-slip&amp;month=<?php echo urlencode($payslipMonth['key']); ?>" class="badge warning" style="text-decoration: none; padding: 8px 14px;">
+                        📄 <?php echo htmlspecialchars($payslipMonth['label']); ?>
+                    </a>
+                <?php } ?>
+                <a href="dashboard.php?page=salary-slip" class="badge success" style="text-decoration: none; padding: 8px 14px;">
+                    📄 Current month (<?php echo date('M Y'); ?>)
+                </a>
+            </div>
+        </div>
+    <?php } ?>
+
     <!-- HOURLY UPDATE WARNING -->
     <?php if($warningMsg != "") { ?>
         <div class="alert danger glowing-element">
@@ -379,8 +405,8 @@ if ($hourlyShowAll) {
 
             <!-- MISSED UPDATES SUMMARY -->
             <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
-                <h2>Missed Updates (<?php echo date('M Y'); ?>)</h2>
-                <p style="font-size: 2rem; font-family: var(--font-heading); font-weight: 800; color: var(--danger); margin: 0;">
+                <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 8px;">Missed Updates (<?php echo date('M Y'); ?>)</h2>
+                <p style="font-size: 1.35rem; font-family: var(--font-heading); font-weight: 700; color: var(--danger); margin: 0;">
                     <?php echo (int) $missedReport['total_missed']; ?>
                 </p>
                 <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 10px;">

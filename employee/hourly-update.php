@@ -105,7 +105,7 @@ if ($activeShift) {
         $canSubmit = $currentSlot && !hasHourlyUpdateInSlot($conn, $employee_id, (int)$activeShift['id'], $currentSlot['slot_date'], $currentSlot['slot_hour']);
         ?>
 
-        <form method="POST" action="dashboard.php?page=hourly-update">
+        <form method="POST" action="dashboard.php?page=hourly-update" id="hourlyUpdateForm">
             <div class="form-group">
                 <label>Describe Your Current Work</label>
                 <textarea
@@ -117,7 +117,21 @@ if ($activeShift) {
                 ></textarea>
             </div>
 
-            <button type="submit" name="submit" class="glowing-element" <?php echo $canSubmit ? '' : 'disabled'; ?>>
+            <?php if ($canSubmit) { ?>
+            <div class="form-group">
+                <label>Current Location <span style="color: var(--text-muted); font-weight: normal;">(captured live with your update)</span></label>
+                <div id="hourlyLocationBadgeContainer">
+                    <span class="location-badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); border-color: rgba(255,255,255,0.1);">
+                        🔄 Fetching your current location…
+                    </span>
+                </div>
+            </div>
+            <?php } ?>
+
+            <input type="hidden" name="current_location" id="hourly_current_location" value="">
+            <input type="hidden" name="location_accuracy" id="hourly_location_accuracy" value="">
+
+            <button type="submit" name="submit" class="glowing-element" id="hourlySubmitBtn" <?php echo $canSubmit ? '' : 'disabled'; ?>>
                 🚀 Submit Progress Log
             </button>
             <?php if(!$canSubmit && $currentSlot) { ?>
@@ -133,6 +147,140 @@ if ($activeShift) {
 
     <?php } ?>
 </div>
+
+<?php if (($activeShift ?? null) && ($canSubmit ?? false)) { ?>
+<script>
+(function () {
+    var LOCATION_OPTIONS = { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 };
+    var DESIRED_ACCURACY_METERS = 100;
+    var LOCATION_WATCH_MS = 12000;
+
+    var state = { ready: false, lat: null, lng: null, accuracy: null, address: null, error: null };
+
+    var badge = document.getElementById("hourlyLocationBadgeContainer");
+    var locationField = document.getElementById("hourly_current_location");
+    var accuracyField = document.getElementById("hourly_location_accuracy");
+    var form = document.getElementById("hourlyUpdateForm");
+    var submitBtn = document.getElementById("hourlySubmitBtn");
+    var submitting = false;
+
+    function setBadge(status, message) {
+        var styles = {
+            loading: 'background: rgba(255,255,255,0.05); color: var(--text-muted); border-color: rgba(255,255,255,0.1);',
+            ok: '',
+            warn: 'color: var(--warning); background: rgba(245,158,11,0.1); border-color: var(--warning-border);',
+            error: 'color: var(--danger); background: rgba(239,68,68,0.1); border-color: var(--danger-border);'
+        };
+        if (badge) {
+            badge.innerHTML = '<span class="location-badge" style="' + (styles[status] || styles.ok) + '">' + message + '</span>';
+        }
+    }
+
+    function setFields() {
+        if (state.address) {
+            locationField.value = state.address;
+        } else if (state.lat != null && state.lng != null) {
+            locationField.value = 'Lat: ' + state.lat + ', Lng: ' + state.lng;
+        }
+        accuracyField.value = state.accuracy != null ? String(Math.round(state.accuracy)) : '';
+    }
+
+    function renderBadge() {
+        if (state.error && !state.ready) { setBadge('error', '❌ ' + state.error); return; }
+        if (!state.ready) { setBadge('loading', '🔄 Acquiring your location… allow access when prompted.'); return; }
+        var shortAddress = state.address ? state.address.split(',')[0] : 'Coordinates only';
+        var accLabel = state.accuracy != null ? ' ±' + Math.round(state.accuracy) + 'm' : '';
+        var quality = state.accuracy != null && state.accuracy <= DESIRED_ACCURACY_METERS ? 'ok' : 'warn';
+        var icon = quality === 'ok' ? '📍' : '⚠️';
+        setBadge(quality, icon + ' ' + shortAddress + ' (' + state.lat.toFixed(6) + ', ' + state.lng.toFixed(6) + accLabel + ')');
+    }
+
+    function reverseGeocode(lat, lng) {
+        var url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lng) + '&zoom=18&addressdetails=1';
+        return fetch(url, { headers: { 'Accept': 'application/json', 'Accept-Language': 'en' } })
+            .then(function (res) { return res.json(); })
+            .then(function (data) { return data.display_name || ('Lat: ' + lat + ', Lng: ' + lng); })
+            .catch(function () { return 'Lat: ' + lat + ', Lng: ' + lng; });
+    }
+
+    function applyPosition(position) {
+        var lat = position.coords.latitude;
+        var lng = position.coords.longitude;
+        var accuracy = position.coords.accuracy;
+        if (state.accuracy != null && accuracy >= state.accuracy) { return; }
+        state.lat = lat; state.lng = lng; state.accuracy = accuracy; state.ready = true; state.error = null;
+        setFields();
+        renderBadge();
+        reverseGeocode(lat, lng).then(function (address) {
+            if (state.lat === lat && state.lng === lng) {
+                state.address = address;
+                setFields();
+                renderBadge();
+            }
+        });
+    }
+
+    function fetchBestLocation(maxWatchMs) {
+        maxWatchMs = maxWatchMs || LOCATION_WATCH_MS;
+        return new Promise(function (resolve) {
+            if (!navigator.geolocation) {
+                state.error = 'Geolocation is not supported in this browser.';
+                renderBadge();
+                resolve(false);
+                return;
+            }
+            var settled = false;
+            var watchId = null;
+            var startedAt = Date.now();
+            function finish() {
+                if (settled) { return; }
+                settled = true;
+                if (watchId != null) { navigator.geolocation.clearWatch(watchId); }
+                resolve(state.ready);
+            }
+            watchId = navigator.geolocation.watchPosition(
+                function (position) {
+                    applyPosition(position);
+                    var elapsed = Date.now() - startedAt;
+                    if (position.coords.accuracy <= DESIRED_ACCURACY_METERS || elapsed >= maxWatchMs) { finish(); }
+                },
+                function (error) {
+                    navigator.geolocation.getCurrentPosition(
+                        function (position) { applyPosition(position); finish(); },
+                        function () {
+                            state.error = error.code === 1
+                                ? 'Location permission denied. Enable location access to submit.'
+                                : 'Could not determine location. Check browser location settings.';
+                            renderBadge();
+                            finish();
+                        },
+                        LOCATION_OPTIONS
+                    );
+                },
+                LOCATION_OPTIONS
+            );
+            setTimeout(finish, maxWatchMs + 500);
+        });
+    }
+
+    fetchBestLocation();
+
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            if (submitting) { return; }
+            e.preventDefault();
+            submitting = true;
+            if (submitBtn) { submitBtn.disabled = true; }
+            setBadge('loading', '📍 Confirming your location before submit…');
+            fetchBestLocation(6000).then(function () {
+                setFields();
+                form.submit();
+            });
+        });
+    }
+})();
+</script>
+<?php } ?>
 
 <?php if (isset($_SESSION['hourly_success_popup'])) {
     $hourlyPopup = $_SESSION['hourly_success_popup'];

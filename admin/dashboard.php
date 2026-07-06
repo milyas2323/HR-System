@@ -129,13 +129,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_attendance'])) 
     exit();
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_updates'])) {
-    $conn->query('DELETE FROM hourly_updates');
-    $_SESSION['msg'] = 'Hourly updates log reset successfully!';
-    header('Location: dashboard.php?page=hourly-update');
-    exit();
-}
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'misconduct-penalty' && isset($_POST['submit'])) {
     $penaltyResult = processAdminMisconductPenalty(
         $conn,

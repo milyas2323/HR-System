@@ -15,6 +15,21 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+### 2026-07-03 — Hourly update system info columns
+
+- **Scope:** `admin/hourly-update.php`, `includes/functions.php`, `includes/db.php`, `database/migration.sql`, `employee/hourly-update.php`, `employee/dashboard.php`
+- **Summary:** User wanted device and location shown on admin hourly update listing. Correction: location/device must be captured in real time at submit, NOT copied from existing shift/DB data.
+- **Outcome:** Added ip_address, device, current_location to hourly_updates (auto-migration). Employee hourly form now captures live GPS (watchPosition + reverse geocode) and refreshes before submit; device/IP taken from the live request. Admin listing shows real-time System/Device and Location (device/IP fall back to nothing, location no shift fallback).
+- **Decision:** Do not backfill location/device from shifts table; only store what was captured with each update.
+- **Follow-ups:** Upload includes/db.php, includes/functions.php, employee/hourly-update.php, employee/dashboard.php, admin/hourly-update.php to live.
+
+### 2026-07-03 — Hourly update page filters
+
+- **Scope:** `admin/hourly-update.php`, `admin/dashboard.php`
+- **Summary:** User wanted current month by default, Current/Last month quick filters, employee filter, and removal of Clear All Hourly Updates button.
+- **Outcome:** Default date range is current month; added month quick filters and employee dropdown; stats and table respect filters; removed clear button and dashboard reset handler.
+- **Follow-ups:** Upload both files to live.
+
 ### 2026-07-02 — Payroll month filter + payslip sync
 
 - **Scope:** `admin/penalties.php`, `admin/salary-slip.php`

@@ -22,7 +22,7 @@ function dashboardUrlForRole($role) {
 /**
  * Process employee hourly update form submission.
  */
-function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText) {
+function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText, $postData = []) {
     $employeeId = (int) $employeeId;
     $updateText = trim((string) $updateText);
     $result = [
@@ -63,12 +63,25 @@ function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText) 
         return $result;
     }
 
+    $ua = parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '');
+    $submitDevice = $ua['device'] . ' (' . $ua['os'] . ' / ' . $ua['browser'] . ')';
+    $submitIp = getUserIP();
+
+    $submitLocation = trim((string) ($postData['current_location'] ?? ''));
+    $submitAccuracy = trim((string) ($postData['location_accuracy'] ?? ''));
+    if ($submitLocation !== '' && $submitAccuracy !== '' && is_numeric($submitAccuracy)) {
+        $submitLocation .= ' (GPS accuracy: ~' . (int) $submitAccuracy . 'm)';
+    }
+    if ($submitLocation === '') {
+        $submitLocation = 'Unknown Location';
+    }
+
     $stmt = $conn->prepare("
-        INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text)
-        VALUES (?, ?, ?, ?, 0, ?)
+        INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text, ip_address, device, current_location)
+        VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
     ");
     $slotHour = (int) $slot['slot_hour'];
-    $stmt->bind_param('iisis', $employeeId, $shiftId, $slot['slot_date'], $slotHour, $updateText);
+    $stmt->bind_param('iisissss', $employeeId, $shiftId, $slot['slot_date'], $slotHour, $updateText, $submitIp, $submitDevice, $submitLocation);
 
     if ($stmt->execute()) {
         $result['success'] = true;

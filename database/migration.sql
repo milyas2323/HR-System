@@ -33,4 +33,8 @@ ALTER TABLE hourly_updates ADD COLUMN slot_hour TINYINT UNSIGNED DEFAULT NULL AF
 ALTER TABLE hourly_updates ADD COLUMN is_grandfathered TINYINT(1) NOT NULL DEFAULT 0 AFTER slot_hour;
 ALTER TABLE hourly_updates ADD UNIQUE KEY uniq_employee_shift_slot (employee_id, shift_id, slot_date, slot_hour);
 
+-- 6. Hourly update submission audit (device, IP, location at submit time)
+ALTER TABLE hourly_updates ADD COLUMN ip_address VARCHAR(45) DEFAULT NULL AFTER update_text;
+ALTER TABLE hourly_updates ADD COLUMN device VARCHAR(255) DEFAULT NULL AFTER ip_address;
+ALTER TABLE hourly_updates ADD COLUMN current_location TEXT DEFAULT NULL AFTER device;
 

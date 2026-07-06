@@ -44,7 +44,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $submitResult = processEmployeeHourlyUpdateSubmission(
             $conn,
             (int) $user['id'],
-            $_POST['update_text'] ?? ''
+            $_POST['update_text'] ?? '',
+            $_POST
         );
 
         if ($submitResult['success']) {

@@ -83,4 +83,12 @@ $checkGrandfathered = $conn->query("SHOW COLUMNS FROM hourly_updates LIKE 'is_gr
 if ($checkGrandfathered && $checkGrandfathered->num_rows == 0) {
     $conn->query("ALTER TABLE hourly_updates ADD COLUMN is_grandfathered TINYINT(1) NOT NULL DEFAULT 0 AFTER slot_hour");
 }
+
+// 8. Hourly update submission audit: device, IP, location
+$checkHourlyIp = $conn->query("SHOW COLUMNS FROM hourly_updates LIKE 'ip_address'");
+if ($checkHourlyIp && $checkHourlyIp->num_rows == 0) {
+    $conn->query("ALTER TABLE hourly_updates ADD COLUMN ip_address VARCHAR(45) DEFAULT NULL AFTER update_text");
+    $conn->query("ALTER TABLE hourly_updates ADD COLUMN device VARCHAR(255) DEFAULT NULL AFTER ip_address");
+    $conn->query("ALTER TABLE hourly_updates ADD COLUMN current_location TEXT DEFAULT NULL AFTER device");
+}
 ?>

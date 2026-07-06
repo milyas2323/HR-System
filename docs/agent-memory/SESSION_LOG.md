@@ -15,6 +15,13 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+### 2026-07-06 — Require location for hourly updates
+
+- **Scope:** `employee/hourly-update.php`, `includes/functions.php`, `includes/db.php`
+- **Summary:** Admin listing showed empty location on hourly updates; user required blocking submit without live location access.
+- **Outcome:** Server validates lat/lng + address before insert; client blocks submit until GPS ready; submit button disabled until location acquired; re-added hourly_updates audit columns auto-migration in db.php.
+- **Follow-ups:** Upload employee/hourly-update.php, includes/functions.php, includes/db.php to live. Old rows without location remain blank.
+
 ### 2026-07-06 — Fix dashboard redirect loop
 
 - **Scope:** `includes/functions.php`, `admin/dashboard.php`, `employee/dashboard.php`, `login.php`

@@ -47,6 +47,50 @@ function refreshSessionUserFromDatabase($conn) {
 }
 
 /**
+ * Validate live location data sent with an hourly update.
+ */
+function validateHourlyUpdateLocationSubmission($postData) {
+    $location = trim((string) ($postData['current_location'] ?? ''));
+    $latitude = trim((string) ($postData['current_latitude'] ?? ''));
+    $longitude = trim((string) ($postData['current_longitude'] ?? ''));
+    $accuracy = trim((string) ($postData['location_accuracy'] ?? ''));
+
+    if ($latitude === '' || $longitude === '' || !is_numeric($latitude) || !is_numeric($longitude)) {
+        return [
+            'valid' => false,
+            'message' => 'Location access is required. Allow browser location permission and try again.',
+        ];
+    }
+
+    $lat = (float) $latitude;
+    $lng = (float) $longitude;
+    if (abs($lat) < 0.000001 && abs($lng) < 0.000001) {
+        return [
+            'valid' => false,
+            'message' => 'Invalid location coordinates. Enable GPS/location access and try again.',
+        ];
+    }
+
+    if ($location === '' || strcasecmp($location, 'Unknown Location') === 0) {
+        return [
+            'valid' => false,
+            'message' => 'Location is still loading or unavailable. Wait for your location to appear, then submit.',
+        ];
+    }
+
+    if ($accuracy !== '' && is_numeric($accuracy)) {
+        $location .= ' (GPS accuracy: ~' . (int) $accuracy . 'm)';
+    }
+
+    return [
+        'valid' => true,
+        'location' => $location,
+        'latitude' => $latitude,
+        'longitude' => $longitude,
+    ];
+}
+
+/**
  * Process employee hourly update form submission.
  */
 function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText, $postData = []) {
@@ -90,18 +134,16 @@ function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText, 
         return $result;
     }
 
+    $locationCheck = validateHourlyUpdateLocationSubmission($postData);
+    if (!$locationCheck['valid']) {
+        $result['message'] = $locationCheck['message'];
+        return $result;
+    }
+
     $ua = parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '');
     $submitDevice = $ua['device'] . ' (' . $ua['os'] . ' / ' . $ua['browser'] . ')';
     $submitIp = getUserIP();
-
-    $submitLocation = trim((string) ($postData['current_location'] ?? ''));
-    $submitAccuracy = trim((string) ($postData['location_accuracy'] ?? ''));
-    if ($submitLocation !== '' && $submitAccuracy !== '' && is_numeric($submitAccuracy)) {
-        $submitLocation .= ' (GPS accuracy: ~' . (int) $submitAccuracy . 'm)';
-    }
-    if ($submitLocation === '') {
-        $submitLocation = 'Unknown Location';
-    }
+    $submitLocation = $locationCheck['location'];
 
     $stmt = $conn->prepare("
         INSERT INTO hourly_updates (employee_id, shift_id, slot_date, slot_hour, is_grandfathered, update_text, ip_address, device, current_location)

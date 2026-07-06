@@ -119,7 +119,10 @@ if ($activeShift) {
 
             <?php if ($canSubmit) { ?>
             <div class="form-group">
-                <label>Current Location <span style="color: var(--text-muted); font-weight: normal;">(captured live with your update)</span></label>
+                <label>Current Location <span style="color: var(--danger); font-weight: 600;">(required)</span></label>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 10px 0;">
+                    Hourly updates cannot be submitted without live location access. Allow location permission in your browser.
+                </p>
                 <div id="hourlyLocationBadgeContainer">
                     <span class="location-badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); border-color: rgba(255,255,255,0.1);">
                         🔄 Fetching your current location…
@@ -129,9 +132,11 @@ if ($activeShift) {
             <?php } ?>
 
             <input type="hidden" name="current_location" id="hourly_current_location" value="">
+            <input type="hidden" name="current_latitude" id="hourly_current_latitude" value="">
+            <input type="hidden" name="current_longitude" id="hourly_current_longitude" value="">
             <input type="hidden" name="location_accuracy" id="hourly_location_accuracy" value="">
 
-            <button type="submit" name="submit" class="glowing-element" id="hourlySubmitBtn" <?php echo $canSubmit ? '' : 'disabled'; ?>>
+            <button type="submit" name="submit" class="glowing-element" id="hourlySubmitBtn" <?php echo $canSubmit ? 'disabled' : 'disabled'; ?>>
                 🚀 Submit Progress Log
             </button>
             <?php if(!$canSubmit && $currentSlot) { ?>
@@ -159,10 +164,19 @@ if ($activeShift) {
 
     var badge = document.getElementById("hourlyLocationBadgeContainer");
     var locationField = document.getElementById("hourly_current_location");
+    var latitudeField = document.getElementById("hourly_current_latitude");
+    var longitudeField = document.getElementById("hourly_current_longitude");
     var accuracyField = document.getElementById("hourly_location_accuracy");
     var form = document.getElementById("hourlyUpdateForm");
     var submitBtn = document.getElementById("hourlySubmitBtn");
     var submitting = false;
+
+    function updateSubmitState() {
+        if (!submitBtn) {
+            return;
+        }
+        submitBtn.disabled = submitting || !state.ready || !!state.error;
+    }
 
     function setBadge(status, message) {
         var styles = {
@@ -177,22 +191,37 @@ if ($activeShift) {
     }
 
     function setFields() {
+        if (state.lat != null && state.lng != null) {
+            latitudeField.value = String(state.lat);
+            longitudeField.value = String(state.lng);
+        }
         if (state.address) {
             locationField.value = state.address;
         } else if (state.lat != null && state.lng != null) {
             locationField.value = 'Lat: ' + state.lat + ', Lng: ' + state.lng;
+        } else {
+            locationField.value = '';
         }
         accuracyField.value = state.accuracy != null ? String(Math.round(state.accuracy)) : '';
     }
 
     function renderBadge() {
-        if (state.error && !state.ready) { setBadge('error', '❌ ' + state.error); return; }
-        if (!state.ready) { setBadge('loading', '🔄 Acquiring your location… allow access when prompted.'); return; }
+        if (state.error && !state.ready) {
+            setBadge('error', '❌ ' + state.error);
+            updateSubmitState();
+            return;
+        }
+        if (!state.ready) {
+            setBadge('loading', '🔄 Acquiring your location… allow access when prompted.');
+            updateSubmitState();
+            return;
+        }
         var shortAddress = state.address ? state.address.split(',')[0] : 'Coordinates only';
         var accLabel = state.accuracy != null ? ' ±' + Math.round(state.accuracy) + 'm' : '';
         var quality = state.accuracy != null && state.accuracy <= DESIRED_ACCURACY_METERS ? 'ok' : 'warn';
         var icon = quality === 'ok' ? '📍' : '⚠️';
         setBadge(quality, icon + ' ' + shortAddress + ' (' + state.lat.toFixed(6) + ', ' + state.lng.toFixed(6) + accLabel + ')');
+        updateSubmitState();
     }
 
     function reverseGeocode(lat, lng) {
@@ -267,13 +296,36 @@ if ($activeShift) {
 
     if (form) {
         form.addEventListener('submit', function (e) {
-            if (submitting) { return; }
+            if (submitting) {
+                return;
+            }
             e.preventDefault();
             submitting = true;
-            if (submitBtn) { submitBtn.disabled = true; }
+            updateSubmitState();
             setBadge('loading', '📍 Confirming your location before submit…');
-            fetchBestLocation(6000).then(function () {
+            fetchBestLocation(6000).then(function (ok) {
                 setFields();
+                if (!ok || !state.ready || state.lat == null || state.lng == null) {
+                    submitting = false;
+                    state.error = state.error || 'Location access is required before submitting an hourly update.';
+                    renderBadge();
+                    alert('Location access is required. Allow browser location permission, wait for the location badge to turn green, then try again.');
+                    return;
+                }
+                if (Math.abs(state.lat) < 0.000001 && Math.abs(state.lng) < 0.000001) {
+                    submitting = false;
+                    state.error = 'Invalid location coordinates received. Please try again.';
+                    renderBadge();
+                    alert('Invalid location coordinates. Please refresh the page and allow location access.');
+                    return;
+                }
+                if (!locationField.value || locationField.value === 'Unknown Location') {
+                    submitting = false;
+                    state.error = 'Location is still loading. Wait a moment and try again.';
+                    renderBadge();
+                    alert('Location is still loading. Please wait until your address appears, then submit again.');
+                    return;
+                }
                 form.submit();
             });
         });

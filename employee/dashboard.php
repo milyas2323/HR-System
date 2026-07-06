@@ -3,27 +3,19 @@ include_once "../includes/db.php";
 include_once "../includes/auth.php";
 include_once "../includes/functions.php";
 
-if (normalizeUserRole($_SESSION['user']['role'] ?? '') === 'admin') {
-    header('Location: ../admin/dashboard.php');
-    exit();
-}
-if (normalizeUserRole($_SESSION['user']['role'] ?? '') !== 'employee') {
+$user = refreshSessionUserFromDatabase($conn);
+if (!$user) {
     header('Location: ../login.php');
     exit();
 }
 
-$user = $_SESSION['user'];
-
-// Refresh user info from DB
-$refreshUser = $conn->query("SELECT * FROM users WHERE id='{$user['id']}' LIMIT 1");
-if ($refreshUser && $refreshUser->num_rows > 0) {
-    $user = $refreshUser->fetch_assoc();
-    $user['role'] = normalizeUserRole($user['role'] ?? '');
-    $_SESSION['user'] = $user;
-    if ($user['role'] === 'admin') {
-        header('Location: ../admin/dashboard.php');
-        exit();
-    }
+if (($user['role'] ?? '') === 'admin') {
+    header('Location: ../admin/dashboard.php');
+    exit();
+}
+if (($user['role'] ?? '') !== 'employee') {
+    header('Location: ../login.php');
+    exit();
 }
 
 $page = $_GET['page'] ?? 'home';

@@ -3,8 +3,14 @@ include_once "../includes/db.php";
 include_once "../includes/auth.php";
 include_once "../includes/functions.php";
 
-if (normalizeUserRole($_SESSION['user']['role'] ?? '') !== 'admin') {
-    if (normalizeUserRole($_SESSION['user']['role'] ?? '') === 'employee') {
+$user = refreshSessionUserFromDatabase($conn);
+if (!$user) {
+    header('Location: ../login.php');
+    exit();
+}
+
+if (($user['role'] ?? '') !== 'admin') {
+    if (($user['role'] ?? '') === 'employee') {
         header('Location: ../employee/dashboard.php');
     } else {
         header('Location: ../login.php');
@@ -12,7 +18,6 @@ if (normalizeUserRole($_SESSION['user']['role'] ?? '') !== 'admin') {
     exit();
 }
 
-$user = $_SESSION['user'];
 $page = isset($_GET['page']) ? $_GET['page'] : 'home';
 
 // POST actions for included pages must run before any HTML output (reports.php is included later).

@@ -15,6 +15,13 @@ Append-only log of significant work. Newest entries at the **top**.
 
 ---
 
+### 2026-07-06 — Fix dashboard redirect loop
+
+- **Scope:** `includes/functions.php`, `admin/dashboard.php`, `employee/dashboard.php`, `login.php`
+- **Summary:** User hit `ERR_TOO_MANY_REDIRECTS` on dashboard.
+- **Outcome:** Added shared session-user refresh helper so both dashboards normalize role from DB before role-based redirects; removed duplicate employee-side refresh block; regenerated session ID on login for cleaner session transitions.
+- **Follow-ups:** Upload these four files to live and clear browser cookies once.
+
 ### 2026-07-03 — Hourly update system info columns
 
 - **Scope:** `admin/hourly-update.php`, `includes/functions.php`, `includes/db.php`, `database/migration.sql`, `employee/hourly-update.php`, `employee/dashboard.php`

@@ -20,6 +20,33 @@ function dashboardUrlForRole($role) {
 }
 
 /**
+ * Reload the logged-in user from DB and normalize role.
+ * Returns refreshed user array or null when session/user is invalid.
+ */
+function refreshSessionUserFromDatabase($conn) {
+    if (!isset($_SESSION['user']['id'])) {
+        return null;
+    }
+
+    $userId = (int) $_SESSION['user']['id'];
+    if ($userId <= 0) {
+        unset($_SESSION['user']);
+        return null;
+    }
+
+    $result = $conn->query("SELECT * FROM users WHERE id='$userId' LIMIT 1");
+    if (!$result || $result->num_rows === 0) {
+        unset($_SESSION['user']);
+        return null;
+    }
+
+    $user = $result->fetch_assoc();
+    $user['role'] = normalizeUserRole($user['role'] ?? '');
+    $_SESSION['user'] = $user;
+    return $user;
+}
+
+/**
  * Process employee hourly update form submission.
  */
 function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText, $postData = []) {

@@ -21,6 +21,7 @@ if(isset($_POST['login'])){
         // Secure password verify (with plain text fallback)
         if(verifyPassword($password, $user['password'])){
             $user['role'] = normalizeUserRole($user['role']);
+            session_regenerate_id(true);
             $_SESSION['user'] = $user;
 
             // Audit Login Details

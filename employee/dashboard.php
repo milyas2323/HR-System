@@ -179,6 +179,16 @@ foreach ($missedReport['monthly'] as $monthRow) {
 }
 $expectedMissedFine = calculateMissedUpdatesFineAmount($missedCounts['billable']);
 
+list($currentMonthPayFrom, $currentMonthPayTo) = getPayrollMonthDateRange($currentMonthKey);
+$currentMonthPenaltyData = calculateEmployeeDynamicPenalties($conn, $employeeId, $currentMonthPayFrom, $currentMonthPayTo, $dbNowTs);
+$currentMonthFines = $currentMonthPenaltyData['total'];
+
+$earliestShiftRow = $conn->query("SELECT DATE(MIN(start_time)) AS earliest FROM shifts WHERE employee_id='$employeeId'")->fetch_assoc();
+$allTimeFrom = !empty($earliestShiftRow['earliest']) ? $earliestShiftRow['earliest'] : $currentMonthPayFrom;
+$allTimeTo = date('Y-m-d');
+$allTimePenaltyData = calculateEmployeeDynamicPenalties($conn, $employeeId, $allTimeFrom, $allTimeTo, $dbNowTs);
+$allTimeFines = $allTimePenaltyData['total'];
+
 $previousPayslipMonths = [];
 for ($i = 1; $i <= 6; $i++) {
     $monthKey = date('Y-m', strtotime('first day of -' . $i . ' month'));
@@ -395,11 +405,18 @@ if ($hourlyShowAll) {
             <!-- DEDUCTIONS CARD -->
             <div class="card">
                 <h2>Salary Deductions</h2>
-                <p style="font-size: 2rem; font-family: var(--font-heading); font-weight: 800; color: var(--danger);">
-                    PKR <?php echo number_format($user['total_deduction']); ?>
-                </p>
-                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 10px;">
-                    Deductions accrued this month from absences, missed hourly slots (:00–:15 windows), or missed end reports.
+                <div style="margin-top: 12px;">
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Current month (<?php echo date('M Y'); ?>)</p>
+                    <p style="font-size: 1.75rem; font-family: var(--font-heading); font-weight: 800; color: var(--danger); margin: 0 0 16px;">
+                        PKR <?php echo number_format($currentMonthFines); ?>
+                    </p>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">All time</p>
+                    <p style="font-size: 1.35rem; font-family: var(--font-heading); font-weight: 700; color: var(--danger); margin: 0;">
+                        PKR <?php echo number_format($allTimeFines); ?>
+                    </p>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 14px;">
+                    Live totals from absences, missed hourly slots (:00–:15 windows), missed end reports, and manual fines.
                 </p>
             </div>
 

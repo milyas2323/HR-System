@@ -192,3 +192,10 @@ Append-only log of significant work. Newest entries at the **top**.
 - **Summary:** User wanted home dashboard fines card to show all-time total only (not current month).
 - **Outcome:** Card relabeled “All Time Fines”; sums live penalties from first shift date through today. Salaries & Deduct unchanged.
 - **Follow-ups:** None.
+
+### 2026-07-07 — Employee payslip + dashboard live fines
+
+- **Scope:** `employee/salary-slip.php`, `employee/dashboard.php`
+- **Summary:** Employee payslip still read stale `penalties` table; dashboard Salary Deductions showed `total_deduction` from users table only.
+- **Outcome:** Payslip uses `buildEmployeePenaltyReportRows()`; dashboard shows current month and all-time live fine totals via `calculateEmployeeDynamicPenalties()`.
+- **Follow-ups:** None.

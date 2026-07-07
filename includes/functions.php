@@ -1202,6 +1202,42 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
 }
 
 /**
+ * Date range for payroll / penalty views for a given YYYY-MM month.
+ */
+function getPayrollMonthDateRange($month) {
+    $from = $month . '-01';
+    $to = date('Y-m-t', strtotime($from));
+    if ($month === date('Y-m')) {
+        $to = date('Y-m-d');
+    }
+    return [$from, $to];
+}
+
+/**
+ * Live penalty totals for all employees in a date range.
+ */
+function calculateWorkforceDynamicPenalties($conn, $dateFrom, $dateTo, $auditTimestamp = null) {
+    $auditTimestamp = $auditTimestamp ?? getDatabaseNowTimestamp($conn);
+    $total = 0.0;
+    $byEmployee = [];
+
+    $result = $conn->query("SELECT id FROM users WHERE role='employee'");
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $employeeId = (int) $row['id'];
+            $data = calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateTo, $auditTimestamp);
+            $byEmployee[$employeeId] = $data;
+            $total += $data['total'];
+        }
+    }
+
+    return [
+        'total' => $total,
+        'by_employee' => $byEmployee,
+    ];
+}
+
+/**
  * Build penalty rows for reports UI from live rules + manual DB entries.
  */
 function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, $auditTimestamp = null) {

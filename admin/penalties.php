@@ -1,6 +1,7 @@
 <?php
 include_once "../includes/db.php";
 include_once "../includes/auth.php";
+include_once "../includes/functions.php";
 
 if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
@@ -17,10 +18,12 @@ if ($monthInput !== '') {
     }
 }
 
-$selectedMonthEsc = mysqli_real_escape_string($conn, $selectedMonth);
 $displayMonth = date('F Y', strtotime($selectedMonth . '-01'));
 $isCurrentMonth = ($selectedMonth === $currentMonth);
 $isPreviousMonth = ($selectedMonth === $previousMonth);
+
+list($monthFrom, $monthTo) = getPayrollMonthDateRange($selectedMonth);
+$dbNowTs = getDatabaseNowTimestamp($conn);
 
 /* TOTAL CAPACITY STATISTICS */
 $totalSalary = $conn->query("
@@ -29,14 +32,9 @@ $totalSalary = $conn->query("
     WHERE role='employee'
 ")->fetch_assoc();
 
-$totalDeduction = $conn->query("
-    SELECT SUM(amount) as total 
-    FROM penalties
-    WHERE DATE_FORMAT(created_at, '%Y-%m') = '$selectedMonthEsc'
-")->fetch_assoc();
-
-$grossSalary = $totalSalary['total'] ?? 0;
-$totalPenalty = $totalDeduction['total'] ?? 0;
+$grossSalary = floatval($totalSalary['total'] ?? 0);
+$workforcePenalties = calculateWorkforceDynamicPenalties($conn, $monthFrom, $monthTo, $dbNowTs);
+$totalPenalty = $workforcePenalties['total'];
 $netSalary = $grossSalary - $totalPenalty;
 ?>
 
@@ -58,7 +56,7 @@ $netSalary = $grossSalary - $totalPenalty;
     </div>
     <div class="alert info" style="margin-top: 14px; margin-bottom: 0;">
         <span>ℹ️</span>
-        <span>Showing payroll for <strong><?php echo htmlspecialchars($displayMonth); ?></strong>. View Payslip opens the same month.</span>
+        <span>Showing payroll for <strong><?php echo htmlspecialchars($displayMonth); ?></strong> using live penalty calculations. View Payslip opens the same month.</span>
     </div>
 </div>
 
@@ -97,21 +95,17 @@ $netSalary = $grossSalary - $totalPenalty;
             </tr>
             <?php
             $payrolls = $conn->query("
-                SELECT 
-                    u.id, u.name, u.email, u.salary,
-                    COALESCE(SUM(p.amount), 0) AS total_deduction
-                FROM users u
-                LEFT JOIN penalties p ON u.id = p.employee_id
-                    AND DATE_FORMAT(p.created_at, '%Y-%m') = '$selectedMonthEsc'
-                WHERE u.role='employee'
-                GROUP BY u.id, u.name, u.email, u.salary
-                ORDER BY u.name ASC
+                SELECT id, name, email, salary
+                FROM users
+                WHERE role='employee'
+                ORDER BY name ASC
             ");
 
             if($payrolls && $payrolls->num_rows > 0){
                 while($row = $payrolls->fetch_assoc()){
+                    $employeeId = (int) $row['id'];
                     $salary = floatval($row['salary']);
-                    $deduction = floatval($row['total_deduction']);
+                    $deduction = $workforcePenalties['by_employee'][$employeeId]['total'] ?? 0.0;
                     $remaining = $salary - $deduction;
             ?>
                 <tr>

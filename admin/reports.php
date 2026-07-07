@@ -273,6 +273,9 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
 
     $overviewPenaltyFrom = ($dateFilterActive && $dateFilterError === '') ? $date_from : date('Y-m-01');
     $overviewPenaltyTo = ($dateFilterActive && $dateFilterError === '') ? $date_to : date('Y-m-d');
+    $reportPeriodLabel = ($dateFilterActive && $dateFilterError === '')
+        ? date('d M', strtotime($date_from)) . ' – ' . date('d M Y', strtotime($date_to))
+        : date('M Y');
 ?>
 
 <div class="card">
@@ -360,21 +363,30 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         $missedReport = buildEmployeeMissedUpdatesReport($conn, $employee_id, $employeeShifts, $dbNowTs);
         $missedCounts = countBillableMissedUpdatesForShifts($conn, $employee_id, $employeeShifts, $dbNowTs);
 
-        $totalPenaltyAllTime = reportsGetPenaltySum($conn, $employee_id);
-        $thisMonthFrom = date('Y-m-01');
-        $thisMonthTo = date('Y-m-d');
-        $thisMonthPenaltyData = calculateEmployeeDynamicPenalties($conn, $employee_id, $thisMonthFrom, $thisMonthTo, $dbNowTs);
-        $totalPenaltyMonth = $thisMonthPenaltyData['total'];
-        $grossSalary = floatval($empDetails['salary']);
-        $netSalary = max(0, $grossSalary - $totalPenaltyMonth);
+        $detailPenaltyFrom = ($dateFilterActive && $dateFilterError === '') ? $date_from : date('Y-m-01');
+        $detailPenaltyTo = ($dateFilterActive && $dateFilterError === '') ? $date_to : date('Y-m-d');
+        $detailPeriodLabel = ($dateFilterActive && $dateFilterError === '')
+            ? date('d M', strtotime($date_from)) . ' – ' . date('d M Y', strtotime($date_to))
+            : date('M Y');
 
-        // Live missed-update totals for current month (same rules as penalty engine)
+        $penaltyReport = buildEmployeePenaltyReportRows($conn, $employee_id, $detailPenaltyFrom, $detailPenaltyTo, $dbNowTs);
+        $penaltyRows = $penaltyReport['rows'];
+        $penaltyBreakdown = $penaltyReport['breakdown'];
+        $penaltyBreakdownTotal = $penaltyReport['total'];
+        $detailPenaltyData = $penaltyReport['dynamic'];
+
+        $totalPenaltyAllTime = reportsGetPenaltySum($conn, $employee_id);
+        $totalPenaltyPeriod = $detailPenaltyData['total'];
+        $grossSalary = floatval($empDetails['salary']);
+        $netSalary = max(0, $grossSalary - $totalPenaltyPeriod);
+
+        $billablePeriodMissed = $detailPenaltyData['missed_updates_total'];
+        $finedMissedCount = $detailPenaltyData['missed_updates_fined_count'];
+        $expectedMissedFine = $detailPenaltyData['missed_updates_fine'];
+
         $currentMonthShifts = reportsFetchEmployeeShifts($conn, $employee_id, true, date('Y-m-01'), date('Y-m-t'));
         $currentMonthMissedCounts = countBillableMissedUpdatesForShifts($conn, $employee_id, $currentMonthShifts, $dbNowTs);
-        $billableMonthMissed = $thisMonthPenaltyData['missed_updates_total'];
-        $finedMissedCount = $thisMonthPenaltyData['missed_updates_fined_count'];
         $pendingMonthMissed = $currentMonthMissedCounts['pending'];
-        $expectedMissedFine = $thisMonthPenaltyData['missed_updates_fine'];
 
         $shiftActive = $conn->query("
             SELECT COUNT(*) as total FROM shifts
@@ -384,64 +396,10 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         $dateClauseLogins = $dateFilterActive ? ' AND ' . reportsDateBetweenClause($conn, 'created_at', $date_from, $date_to) : '';
         $loginLimit = $dateFilterActive ? '' : ' LIMIT 8';
 
-        // Monthly penalties for monthly missed summary
+        // Monthly penalties for monthly missed summary (live calculation per month)
         $penaltiesByMonth = [];
-        $penaltyMonthResult = $conn->query("
-            SELECT DATE_FORMAT(created_at, '%Y-%m') AS month_key, SUM(amount) AS total
-            FROM penalties
-            WHERE employee_id='$employee_id'
-            GROUP BY month_key
-        ");
-        if ($penaltyMonthResult) {
-            while ($row = $penaltyMonthResult->fetch_assoc()) {
-                $penaltiesByMonth[$row['month_key']] = floatval($row['total']);
-            }
-        }
-
-        // Full penalty breakdown (separate from missed-update audit count)
-        $dateClausePenalties = $dateFilterActive
-            ? ' AND ' . reportsDateBetweenClause($conn, 'created_at', $date_from, $date_to)
-            : '';
-
-        $penaltyRows = [];
-        $penaltyBreakdown = [
-            'absence' => [
-                'label' => 'Shift Absences',
-                'description' => 'PKR 5,000 per weekday with no shift start',
-                'count' => 0,
-                'total' => 0.0,
-            ],
-            'missed_updates' => [
-                'label' => 'Missed Updates Fines',
-                'description' => '3 free per month, then PKR 1,000 each',
-                'count' => 0,
-                'total' => 0.0,
-            ],
-            'manual' => [
-                'label' => 'Manual / Misconduct',
-                'description' => 'Logged by admin',
-                'count' => 0,
-                'total' => 0.0,
-            ],
-        ];
-        $penaltyBreakdownTotal = 0.0;
-
-        $penaltyListResult = $conn->query("
-            SELECT id, reason, amount, created_at
-            FROM penalties
-            WHERE employee_id='$employee_id' $dateClausePenalties
-            ORDER BY created_at DESC
-        ");
-        if ($penaltyListResult) {
-            while ($row = $penaltyListResult->fetch_assoc()) {
-                $type = classifyPenaltyType($row['reason']);
-                $amount = floatval($row['amount']);
-                $row['type'] = $type;
-                $penaltyRows[] = $row;
-                $penaltyBreakdown[$type['key']]['count']++;
-                $penaltyBreakdown[$type['key']]['total'] += $amount;
-                $penaltyBreakdownTotal += $amount;
-            }
+        foreach ($detailPenaltyData['by_month'] as $monthKey => $monthData) {
+            $penaltiesByMonth[$monthKey] = $monthData['absence_fine'] + $monthData['missed_updates_fine'] + $monthData['manual_fine'];
         }
 
         $hourlyHistoryRows = [];
@@ -517,15 +475,15 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         </div>
 
         <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
-            <h4>Penalty (<?php echo date('M Y'); ?>)</h4>
-            <h2 style="color: var(--danger);">PKR <?php echo number_format($totalPenaltyMonth); ?></h2>
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">All-time: PKR <?php echo number_format($totalPenaltyAllTime); ?></p>
+            <h4>Penalty (<?php echo htmlspecialchars($detailPeriodLabel); ?>)</h4>
+            <h2 style="color: var(--danger);">PKR <?php echo number_format($totalPenaltyPeriod); ?></h2>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">DB all-time: PKR <?php echo number_format($totalPenaltyAllTime); ?></p>
         </div>
 
         <div class="card stat-box" style="border-bottom: 4px solid var(--success);">
-            <h4>Net Salary (<?php echo date('M Y'); ?>)</h4>
+            <h4>Net Salary (<?php echo htmlspecialchars($detailPeriodLabel); ?>)</h4>
             <h2 style="color: var(--success);">PKR <?php echo number_format($netSalary); ?></h2>
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Gross PKR <?php echo number_format($grossSalary); ?> − <?php echo date('M'); ?> penalties</p>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Gross PKR <?php echo number_format($grossSalary); ?> − <?php echo htmlspecialchars($detailPeriodLabel); ?> penalties</p>
         </div>
     </div>
 
@@ -552,14 +510,14 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             </div>
         <?php } ?>
 
-        <div class="alert <?php echo ($expectedMissedFine > 0 && $totalPenaltyMonth < $expectedMissedFine) ? 'danger' : 'info'; ?>" style="margin-bottom: 20px;">
-            <span><?php echo ($expectedMissedFine > 0 && $totalPenaltyMonth < $expectedMissedFine) ? '⚠️' : 'ℹ️'; ?></span>
+        <div class="alert info" style="margin-bottom: 20px;">
+            <span>ℹ️</span>
             <span>
-                <strong><?php echo date('F Y'); ?>:</strong>
-                <?php echo $billableMonthMissed; ?> total missed update(s)
+                <strong><?php echo htmlspecialchars($detailPeriodLabel); ?>:</strong>
+                <?php echo $billablePeriodMissed; ?> total missed update(s)
                 (<?php echo $finedMissedCount; ?> fined after 3 free) →
                 fine <strong>PKR <?php echo number_format($expectedMissedFine); ?></strong>
-                (live total penalties this month: <strong>PKR <?php echo number_format($totalPenaltyMonth); ?></strong>).
+                (live total penalties in range: <strong>PKR <?php echo number_format($totalPenaltyPeriod); ?></strong>).
                 Values refresh every page load.
             </span>
         </div>

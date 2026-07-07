@@ -1,6 +1,7 @@
 <?php
 include_once "../includes/db.php";
 include_once "../includes/auth.php";
+include_once "../includes/functions.php";
 
 if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
@@ -23,7 +24,6 @@ if ($monthInput !== '') {
     }
 }
 
-$selectedMonthEsc = mysqli_real_escape_string($conn, $selectedMonth);
 $display_month = date('F Y', strtotime($selectedMonth . '-01'));
 $isCurrentMonth = ($selectedMonth === $currentMonth);
 $isPreviousMonth = ($selectedMonth === $previousMonth);
@@ -39,21 +39,11 @@ if(!$emp){
 
 $salary = floatval($emp['salary']);
 
-// Get all active penalties for this month
-$penaltiesRes = $conn->query("
-    SELECT * FROM penalties 
-    WHERE employee_id='$employee_id' 
-    AND DATE_FORMAT(created_at, '%Y-%m')='$selectedMonthEsc'
-    ORDER BY id DESC
-");
-
-$deductions = [];
-$total_deductions = 0;
-while($row = $penaltiesRes->fetch_assoc()){
-    $deductions[] = $row;
-    $total_deductions += floatval($row['amount']);
-}
-
+list($monthFrom, $monthTo) = getPayrollMonthDateRange($selectedMonth);
+$dbNowTs = getDatabaseNowTimestamp($conn);
+$penaltyReport = buildEmployeePenaltyReportRows($conn, $employee_id, $monthFrom, $monthTo, $dbNowTs);
+$deductions = $penaltyReport['rows'];
+$total_deductions = $penaltyReport['total'];
 $net_salary = $salary - $total_deductions;
 ?>
 
@@ -289,7 +279,7 @@ $net_salary = $salary - $total_deductions;
                     ?>
                         <tr>
                             <td style="color: var(--text-muted); padding-left: 20px;">
-                                ⚠️ Fine: <?php echo htmlspecialchars($fine['reason']); ?> 
+                                ⚠️ <?php echo htmlspecialchars($fine['reason']); ?>
                                 <span style="font-size: 0.75rem;">(<?php echo date('d M', strtotime($fine['created_at'])); ?>)</span>
                             </td>
                             <td style="text-align: right; color: var(--text-muted);">-</td>

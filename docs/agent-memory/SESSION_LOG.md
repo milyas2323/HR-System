@@ -171,3 +171,24 @@ Append-only log of significant work. Newest entries at the **top**.
 - **Summary:** User requested smaller font for Missed Updates card title and Previous Months Salary Slip section at very top of home dashboard.
 - **Outcome:** Added top card with last 6 months + current month payslip links; reduced Missed Updates heading/count font sizes; employee salary-slip accepts `?month=YYYY-MM` with back link.
 - **Follow-ups:** None.
+
+### 2026-07-07 — Reports detail page dynamic penalties
+
+- **Scope:** `admin/reports.php`
+- **Summary:** Employee detail penalty breakdown showed stale DB total (e.g. PKR 6,000) while overview used live calculation (PKR 4,000 for 7 missed / 4 fined).
+- **Outcome:** Detail view now uses `buildEmployeePenaltyReportRows()` with the same date range as overview; metrics and breakdown cards match live rules.
+- **Follow-ups:** None.
+
+### 2026-07-07 — Dashboard + Salaries & Deduct live penalties
+
+- **Scope:** `includes/functions.php`, `admin/dashboard.php`, `admin/penalties.php`, `admin/salary-slip.php`
+- **Summary:** Admin home and payroll pages still summed stale `penalties` table rows.
+- **Outcome:** Added `getPayrollMonthDateRange()` and `calculateWorkforceDynamicPenalties()`; dashboard home, penalties list, and admin payslip now use live calculations matching reports.
+- **Follow-ups:** Consider aligning `employee/salary-slip.php` the same way.
+
+### 2026-07-07 — Admin dashboard all-time fines stat
+
+- **Scope:** `admin/dashboard.php`
+- **Summary:** User wanted home dashboard fines card to show all-time total only (not current month).
+- **Outcome:** Card relabeled “All Time Fines”; sums live penalties from first shift date through today. Salaries & Deduct unchanged.
+- **Follow-ups:** None.

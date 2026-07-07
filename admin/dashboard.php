@@ -245,16 +245,17 @@ runMonthlyPenaltyAudit($conn);
             WHERE role='employee'
         ")->fetch_assoc();
 
-        $penalties = $conn->query("
-            SELECT SUM(amount) as total 
-            FROM penalties
-        ")->fetch_assoc();
-
         $attendance = $conn->query("
             SELECT COUNT(*) as total 
             FROM shifts 
             WHERE status='active'
         ")->fetch_assoc();
+
+        $dbNowTs = getDatabaseNowTimestamp($conn);
+        $earliestShift = $conn->query("SELECT DATE(MIN(start_time)) AS earliest FROM shifts")->fetch_assoc();
+        $allTimeFrom = !empty($earliestShift['earliest']) ? $earliestShift['earliest'] : date('Y-m-01');
+        $allTimeTo = date('Y-m-d');
+        $liveFines = calculateWorkforceDynamicPenalties($conn, $allTimeFrom, $allTimeTo, $dbNowTs);
     ?>
 
         <!-- TOP HEADER BAR -->
@@ -278,8 +279,9 @@ runMonthlyPenaltyAudit($conn);
             </div>
 
             <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
-                <h4>Total Fines Logged</h4>
-                <h2 style="color: var(--danger);">PKR <?php echo number_format($penalties['total'] ?? 0); ?></h2>
+                <h4>All Time Fines</h4>
+                <h2 style="color: var(--danger);">PKR <?php echo number_format($liveFines['total']); ?></h2>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Live calculation across all employees</p>
             </div>
         </div>
 

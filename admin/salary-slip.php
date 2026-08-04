@@ -44,7 +44,11 @@ $dbNowTs = getDatabaseNowTimestamp($conn);
 $penaltyReport = buildEmployeePenaltyReportRows($conn, $employee_id, $monthFrom, $monthTo, $dbNowTs);
 $deductions = $penaltyReport['rows'];
 $total_deductions = $penaltyReport['total'];
-$net_salary = $salary - $total_deductions;
+
+$bonuses = getEmployeeBonusRows($conn, $employee_id, $selectedMonth);
+$total_bonuses = getEmployeeBonusTotal($conn, $employee_id, $selectedMonth);
+$total_earnings = $salary + $total_bonuses;
+$net_salary = $total_earnings - $total_deductions;
 ?>
 
 <style>
@@ -246,6 +250,7 @@ $net_salary = $salary - $total_deductions;
         <div class="meta-group">
             <h4>Payslip Details</h4>
             <p>Deduction Cycle: <strong><?php echo htmlspecialchars($display_month); ?></strong></p>
+            <p>Bonuses Added: <strong>PKR <?php echo number_format($total_bonuses); ?></strong></p>
             <p>Slip Date: <strong><?php echo date('d M Y'); ?></strong></p>
             <p>Payment Mode: <strong>Bank Transfer</strong></p>
         </div>
@@ -273,8 +278,22 @@ $net_salary = $salary - $total_deductions;
                         <td style="text-align: right; color: var(--text-muted);">-</td>
                     </tr>
 
+                    <!-- ITEMIZED BONUSES -->
+                    <?php foreach($bonuses as $bonus){ ?>
+                        <tr>
+                            <td style="color: var(--text-muted); padding-left: 20px;">
+                                🎁 Bonus — <?php echo htmlspecialchars($bonus['title']); ?>
+                                <span style="font-size: 0.75rem;">(added <?php echo date('d M', strtotime($bonus['created_at'])); ?> by <?php echo htmlspecialchars($bonus['created_by_name'] ?? 'Admin'); ?>)</span>
+                            </td>
+                            <td style="text-align: right; color: var(--success); font-weight: 600;">
+                                <?php echo number_format(floatval($bonus['amount'])); ?>
+                            </td>
+                            <td style="text-align: right; color: var(--text-muted);">-</td>
+                        </tr>
+                    <?php } ?>
+
                     <!-- ITEMIZED DEDUCTIONS -->
-                    <?php if(count($deductions) > 0){ 
+                    <?php if(count($deductions) > 0){
                         foreach($deductions as $fine){
                     ?>
                         <tr>
@@ -302,7 +321,7 @@ $net_salary = $salary - $total_deductions;
                     <tr class="total-row">
                         <td><strong>Subtotals</strong></td>
                         <td style="text-align: right; font-weight: 700; color: var(--accent);">
-                            <?php echo number_format($salary); ?>
+                            <?php echo number_format($total_earnings); ?>
                         </td>
                         <td style="text-align: right; font-weight: 700; color: var(--danger);">
                             <?php echo number_format($total_deductions); ?>

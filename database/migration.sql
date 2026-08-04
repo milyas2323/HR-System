@@ -42,3 +42,58 @@ ALTER TABLE hourly_updates ADD COLUMN current_location TEXT DEFAULT NULL AFTER d
 ALTER TABLE hourly_updates ADD COLUMN is_admin_check TINYINT(1) NOT NULL DEFAULT 0 AFTER is_grandfathered;
 ALTER TABLE hourly_updates ADD COLUMN admin_submitted_by INT DEFAULT NULL AFTER is_admin_check;
 
+
+-- 8. Employee bonuses applied to an admin-selected payslip month (YYYY-MM)
+CREATE TABLE IF NOT EXISTS bonuses (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    bonus_month VARCHAR(7) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    created_by INT DEFAULT NULL,
+    created_by_name VARCHAR(150) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_bonus_employee_month (employee_id, bonus_month)
+);
+
+-- 9. Bonus activity log (audit trail of bonus add/remove actions)
+CREATE TABLE IF NOT EXISTS bonus_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    bonus_id INT DEFAULT NULL,
+    employee_id INT NOT NULL,
+    bonus_month VARCHAR(7) DEFAULT NULL,
+    action VARCHAR(30) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    message TEXT DEFAULT NULL,
+    performed_by INT DEFAULT NULL,
+    performed_by_name VARCHAR(150) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_bonus_log_employee (employee_id),
+    KEY idx_bonus_log_month (bonus_month)
+);
+
+-- 10. Employee requests (late joining, urgent issue, extended break, etc.) with admin approval
+CREATE TABLE IF NOT EXISTS employee_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    request_type VARCHAR(50) NOT NULL,
+    subject VARCHAR(255) DEFAULT NULL,
+    details TEXT NOT NULL,
+    request_date DATE DEFAULT NULL,
+    from_time TIME DEFAULT NULL,
+    to_time TIME DEFAULT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    admin_response TEXT DEFAULT NULL,
+    reviewed_by INT DEFAULT NULL,
+    reviewed_by_name VARCHAR(150) DEFAULT NULL,
+    reviewed_at DATETIME DEFAULT NULL,
+    penalty_applied TINYINT(1) NOT NULL DEFAULT 0,
+    penalty_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_request_employee (employee_id),
+    KEY idx_request_status (status)
+);
+
+-- 11. Penalty tracking on employee requests (rejected / unrequested = PKR 5,000 fine)
+ALTER TABLE employee_requests ADD COLUMN penalty_applied TINYINT(1) NOT NULL DEFAULT 0 AFTER reviewed_at;
+ALTER TABLE employee_requests ADD COLUMN penalty_amount DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER penalty_applied;

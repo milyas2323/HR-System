@@ -25,6 +25,8 @@ $endReportMessage = '';
 $endReportMessageType = 'danger';
 $leaveRequestMessage = '';
 $leaveRequestMessageType = 'danger';
+$employeeRequestMessage = '';
+$employeeRequestMessageType = 'danger';
 $profileMessage = '';
 $profileMessageType = 'danger';
 $checkinMessage = '';
@@ -80,6 +82,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $leaveRequestMessage = $submitResult['message'];
         $leaveRequestMessageType = $submitResult['messageType'];
+    } elseif ($page === 'add-request' && isset($_POST['submit_request'])) {
+        $submitResult = processEmployeeRequestSubmission(
+            $conn,
+            (int) $user['id'],
+            $_POST['request_type'] ?? '',
+            $_POST['subject'] ?? '',
+            $_POST['details'] ?? '',
+            $_POST['request_date'] ?? '',
+            $_POST['from_time'] ?? '',
+            $_POST['to_time'] ?? ''
+        );
+
+        if ($submitResult['success']) {
+            $_SESSION['msg'] = $submitResult['message'];
+            header('Location: dashboard.php?page=add-request');
+            exit();
+        }
+
+        $employeeRequestMessage = $submitResult['message'];
+        $employeeRequestMessageType = $submitResult['messageType'];
     } elseif ($page === 'profile' && isset($_POST['upload'])) {
         $submitResult = processEmployeeProfileUpload($conn, (int) $user['id'], $_FILES['profile_pic'] ?? []);
 
@@ -188,6 +210,12 @@ $allTimeFrom = !empty($earliestShiftRow['earliest']) ? $earliestShiftRow['earlie
 $allTimeTo = date('Y-m-d');
 $allTimePenaltyData = calculateEmployeeDynamicPenalties($conn, $employeeId, $allTimeFrom, $allTimeTo, $dbNowTs);
 $allTimeFines = $allTimePenaltyData['total'];
+
+/* BONUSES (all time + current month + full history) */
+$allTimeBonusTotal = getEmployeeBonusTotal($conn, $employeeId);
+$currentMonthBonusTotal = getEmployeeBonusTotal($conn, $employeeId, $currentMonthKey);
+$bonusMonthlyTotals = getEmployeeBonusMonthlyTotals($conn, $employeeId);
+$bonusHistoryRows = getEmployeeBonusRows($conn, $employeeId);
 
 $previousPayslipMonths = [];
 for ($i = 1; $i <= 6; $i++) {
@@ -315,6 +343,9 @@ if ($hourlyShowAll) {
         <a href="dashboard.php?page=leave-request" class="<?php echo ($page == 'leave-request') ? 'active-page' : ''; ?>">
             <span>📅</span> Leave Request
         </a>
+        <a href="dashboard.php?page=add-request" class="<?php echo ($page == 'add-request') ? 'active-page' : ''; ?>">
+            <span>📨</span> Add Request
+        </a>
         <a href="dashboard.php?page=salary-slip" class="<?php echo ($page == 'salary-slip') ? 'active-page' : ''; ?>">
             <span>💵</span> Salary Slip
         </a>
@@ -343,6 +374,18 @@ if ($hourlyShowAll) {
                     📄 Current month (<?php echo date('M Y'); ?>)
                 </a>
             </div>
+        </div>
+
+        <!-- REQUEST POLICY CAUTION -->
+        <div class="alert danger" style="margin-bottom: 20px;">
+            <span>⚠️</span>
+            <span>
+                <strong>Caution:</strong> late joining, extended breaks, early sign-off or changing your workstation
+                without an <strong>approved</strong> request carries a
+                <strong>PKR <?php echo number_format(REQUEST_VIOLATION_PENALTY_AMOUNT); ?></strong> penalty —
+                a rejected request is fined the same.
+                <a href="dashboard.php?page=add-request" style="color: var(--accent); font-weight: 600;">Submit a request →</a>
+            </span>
         </div>
     <?php } ?>
 
@@ -420,6 +463,24 @@ if ($hourlyShowAll) {
                 </p>
             </div>
 
+            <!-- BONUSES CARD -->
+            <div class="card">
+                <h2>Bonuses</h2>
+                <div style="margin-top: 12px;">
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">All time</p>
+                    <p style="font-size: 1.75rem; font-family: var(--font-heading); font-weight: 800; color: var(--success); margin: 0 0 16px;">
+                        PKR <?php echo number_format($allTimeBonusTotal); ?>
+                    </p>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Current month (<?php echo date('M Y'); ?>)</p>
+                    <p style="font-size: 1.35rem; font-family: var(--font-heading); font-weight: 700; color: var(--success); margin: 0;">
+                        PKR <?php echo number_format($currentMonthBonusTotal); ?>
+                    </p>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 14px;">
+                    Bonuses added by admin. Each one is credited as an earning on the salary slip of the month it was assigned to.
+                </p>
+            </div>
+
             <!-- MISSED UPDATES SUMMARY -->
             <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
                 <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 8px;">Missed Updates (<?php echo date('M Y'); ?>)</h2>
@@ -444,6 +505,71 @@ if ($hourlyShowAll) {
                     </p>
                 <?php } ?>
             </div>
+        </div>
+
+        <!-- BONUSES DETAIL -->
+        <div class="card">
+            <h2>Bonuses — All Time</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">
+                Every bonus credited to you, with the salary slip month it was applied to.
+            </p>
+
+            <?php if (count($bonusMonthlyTotals) > 0) { ?>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 18px;">
+                    <?php foreach ($bonusMonthlyTotals as $bonusMonth) { ?>
+                        <a href="dashboard.php?page=salary-slip&amp;month=<?php echo urlencode($bonusMonth['month']); ?>" class="badge success" style="text-decoration: none; padding: 8px 14px;">
+                            🎁 <?php echo htmlspecialchars($bonusMonth['label']); ?> · PKR <?php echo number_format($bonusMonth['total']); ?>
+                        </a>
+                    <?php } ?>
+                </div>
+            <?php } ?>
+
+            <div class="table-box">
+                <table>
+                    <tr>
+                        <th>Slip Month</th>
+                        <th>Bonus Title / Reason</th>
+                        <th>Amount</th>
+                        <th>Added On</th>
+                    </tr>
+                    <?php if (count($bonusHistoryRows) > 0) {
+                        foreach ($bonusHistoryRows as $bonusRow) {
+                    ?>
+                        <tr>
+                            <td>
+                                <strong><?php echo htmlspecialchars(date('F Y', strtotime($bonusRow['bonus_month'] . '-01'))); ?></strong>
+                            </td>
+
+                            <td style="max-width: 360px; line-height: 1.5; word-wrap: break-word;">
+                                <?php echo htmlspecialchars($bonusRow['title']); ?>
+                            </td>
+
+                            <td style="color: var(--success); font-weight: 700; font-family: var(--font-heading);">
+                                + PKR <?php echo number_format(floatval($bonusRow['amount'])); ?>
+                            </td>
+
+                            <td style="color: var(--text-muted); font-size: 0.85rem;">
+                                📅 <?php echo date('d M Y h:i A', strtotime($bonusRow['created_at'])); ?>
+                            </td>
+                        </tr>
+                    <?php }
+                    } else { ?>
+                        <tr>
+                            <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                                No bonuses have been added to your account yet.
+                            </td>
+                        </tr>
+                    <?php } ?>
+                </table>
+            </div>
+
+            <?php if (count($bonusHistoryRows) > 0) { ?>
+                <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+                    <p style="font-family: var(--font-heading); font-weight: 700; color: var(--success); margin: 0;">
+                        All Time Bonuses: PKR <?php echo number_format($allTimeBonusTotal); ?>
+                    </p>
+                </div>
+            <?php } ?>
         </div>
 
         <!-- MISSED UPDATES DETAIL -->
@@ -707,6 +833,7 @@ if ($hourlyShowAll) {
         elseif($page == 'hourly-update') include "hourly-update.php";
         elseif($page == 'end-report') include "end-report.php";
         elseif($page == 'leave-request') include "leave-request.php";
+        elseif($page == 'add-request') include "add-request.php";
         elseif($page == 'profile') include "profile.php";
         elseif($page == 'salary-slip') include "salary-slip.php";
     } ?>

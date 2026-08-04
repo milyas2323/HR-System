@@ -35,7 +35,9 @@ $totalSalary = $conn->query("
 $grossSalary = floatval($totalSalary['total'] ?? 0);
 $workforcePenalties = calculateWorkforceDynamicPenalties($conn, $monthFrom, $monthTo, $dbNowTs);
 $totalPenalty = $workforcePenalties['total'];
-$netSalary = $grossSalary - $totalPenalty;
+$workforceBonuses = getWorkforceBonusTotals($conn, $selectedMonth);
+$totalBonus = $workforceBonuses['total'];
+$netSalary = $grossSalary + $totalBonus - $totalPenalty;
 ?>
 
 <div class="page-title">Salaries & Deductions Auditor</div>
@@ -73,10 +75,18 @@ $netSalary = $grossSalary - $totalPenalty;
         <h2 style="color: var(--danger);">PKR <?php echo number_format($totalPenalty); ?></h2>
     </div>
 
+    <div class="card stat-box" style="margin-bottom: 0; border-bottom: 4px solid var(--accent);">
+        <h4>Bonuses (<?php echo htmlspecialchars($displayMonth); ?>)</h4>
+        <h2 style="color: var(--success);">PKR <?php echo number_format($totalBonus); ?></h2>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">
+            <a href="dashboard.php?page=bonuses&amp;month=<?php echo urlencode($selectedMonth); ?>" style="color: var(--accent);">Manage bonuses</a>
+        </p>
+    </div>
+
     <div class="card stat-box" style="margin-bottom: 0; border-bottom: 4px solid var(--success);">
         <h4>Net Payout Pool</h4>
         <h2 style="color: var(--success);">PKR <?php echo number_format($netSalary); ?></h2>
-        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Gross − <?php echo htmlspecialchars($displayMonth); ?> fines</p>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Gross + bonuses − <?php echo htmlspecialchars($displayMonth); ?> fines</p>
     </div>
 </div>
 
@@ -89,6 +99,7 @@ $netSalary = $grossSalary - $totalPenalty;
             <tr>
                 <th>Employee Name</th>
                 <th>Contract Salary (Gross)</th>
+                <th>Bonuses</th>
                 <th>Deductions (Fines)</th>
                 <th>Net Payout (Calculated)</th>
                 <th>Actions</th>
@@ -106,7 +117,8 @@ $netSalary = $grossSalary - $totalPenalty;
                     $employeeId = (int) $row['id'];
                     $salary = floatval($row['salary']);
                     $deduction = $workforcePenalties['by_employee'][$employeeId]['total'] ?? 0.0;
-                    $remaining = $salary - $deduction;
+                    $bonus = $workforceBonuses['by_employee'][$employeeId] ?? 0.0;
+                    $remaining = $salary + $bonus - $deduction;
             ?>
                 <tr>
                     <td>
@@ -116,6 +128,10 @@ $netSalary = $grossSalary - $totalPenalty;
 
                     <td style="color: var(--accent); font-weight: 600; font-family: var(--font-heading);">
                         PKR <?php echo number_format($salary); ?>
+                    </td>
+
+                    <td style="color: var(--success); font-weight: 600; font-family: var(--font-heading);">
+                        <?php echo $bonus > 0 ? '+ PKR ' . number_format($bonus) : '<span style="color: var(--text-muted);">-</span>'; ?>
                     </td>
 
                     <td style="color: var(--danger); font-weight: 600; font-family: var(--font-heading);">
@@ -135,7 +151,7 @@ $netSalary = $grossSalary - $totalPenalty;
             <?php } 
             } else { ?>
                 <tr>
-                    <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">
                         No employee payouts sheet found.
                     </td>
                 </tr>

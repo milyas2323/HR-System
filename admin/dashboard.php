@@ -159,6 +159,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'hourly-submit' && isset(
     exit();
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'employee-requests'
+    && (isset($_POST['approve_request']) || isset($_POST['reject_request']))) {
+    $requestAction = isset($_POST['approve_request']) ? 'approved' : 'rejected';
+    $actionResult = processAdminEmployeeRequestAction(
+        $conn,
+        (int) ($_POST['request_id'] ?? 0),
+        $requestAction,
+        $_POST['remarks'] ?? '',
+        (int) ($user['id'] ?? 0),
+        $user['name'] ?? 'Admin',
+        !empty($_POST['apply_penalty'])
+    );
+
+    $_SESSION['request_msg'] = $actionResult['message'];
+    $_SESSION['request_msg_type'] = $actionResult['success'] ? 'success' : 'error';
+
+    $statusFilter = strtolower(trim($_GET['status'] ?? 'pending'));
+    if (!in_array($statusFilter, ['pending', 'approved', 'rejected', 'all'], true)) {
+        $statusFilter = 'pending';
+    }
+    header('Location: dashboard.php?page=employee-requests&status=' . urlencode($statusFilter));
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'employee-requests' && isset($_POST['log_violation'])) {
+    $violationResult = processAdminUnrequestedViolation(
+        $conn,
+        (int) ($_POST['employee_id'] ?? 0),
+        $_POST['request_type'] ?? '',
+        $_POST['violation_date'] ?? '',
+        $_POST['note'] ?? '',
+        (int) ($user['id'] ?? 0),
+        $user['name'] ?? 'Admin'
+    );
+
+    $_SESSION['request_msg'] = $violationResult['message'];
+    $_SESSION['request_msg_type'] = $violationResult['success'] ? 'success' : 'error';
+    header('Location: dashboard.php?page=employee-requests&status=rejected');
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'bonuses' && isset($_POST['add_bonus'])) {
+    $bonusResult = processAdminAddBonus(
+        $conn,
+        (int) ($_POST['employee_id'] ?? 0),
+        $_POST['bonus_month'] ?? '',
+        $_POST['title'] ?? '',
+        $_POST['amount'] ?? 0,
+        (int) ($user['id'] ?? 0),
+        $user['name'] ?? 'Admin'
+    );
+
+    $_SESSION['bonus_msg'] = $bonusResult['message'];
+    $_SESSION['bonus_msg_type'] = $bonusResult['success'] ? 'success' : 'error';
+
+    $redirectMonth = trim($_POST['bonus_month'] ?? '');
+    if (!isValidPayrollMonthKey($redirectMonth)) {
+        $redirectMonth = date('Y-m');
+    }
+    header('Location: dashboard.php?page=bonuses&month=' . urlencode($redirectMonth));
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'bonuses' && isset($_POST['delete_bonus'])) {
+    $bonusResult = processAdminDeleteBonus(
+        $conn,
+        (int) ($_POST['bonus_id'] ?? 0),
+        (int) ($user['id'] ?? 0),
+        $user['name'] ?? 'Admin'
+    );
+
+    $_SESSION['bonus_msg'] = $bonusResult['message'];
+    $_SESSION['bonus_msg_type'] = $bonusResult['success'] ? 'success' : 'error';
+
+    $redirectMonth = trim($_GET['month'] ?? '');
+    if (!isValidPayrollMonthKey($redirectMonth)) {
+        $redirectMonth = date('Y-m');
+    }
+    header('Location: dashboard.php?page=bonuses&month=' . urlencode($redirectMonth));
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'misconduct-penalty' && isset($_POST['submit'])) {
     $penaltyResult = processAdminMisconductPenalty(
         $conn,
@@ -173,6 +255,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'misconduct-penalty' && i
 
 // --- PENALTY AUDIT: recalc current month on each admin visit (idempotent) ---
 runMonthlyPenaltyAudit($conn);
+
+// Pending employee requests drive the sidebar badge.
+$pendingRequestCount = (int) getEmployeeRequestStatusCounts($conn)['pending'];
 ?>
 <?php include "../includes/header.php"; ?>
 
@@ -210,11 +295,20 @@ runMonthlyPenaltyAudit($conn);
         <a class="<?php echo ($page=='penalties') ? 'active-page' : ''; ?>" href="dashboard.php?page=penalties">
             <span>💸</span> Salaries & Deduct
         </a>
+        <a class="<?php echo ($page=='bonuses') ? 'active-page' : ''; ?>" href="dashboard.php?page=bonuses">
+            <span>🎁</span> Add Bonuses
+        </a>
         <a class="<?php echo ($page=='reports') ? 'active-page' : ''; ?>" href="dashboard.php?page=reports">
             <span>📁</span> Employee Reports
         </a>
         <a class="<?php echo ($page=='leave-requests') ? 'active-page' : ''; ?>" href="dashboard.php?page=leave-requests">
             <span>📅</span> Leave Approvals
+        </a>
+        <a class="<?php echo ($page=='employee-requests') ? 'active-page' : ''; ?>" href="dashboard.php?page=employee-requests">
+            <span>📨</span> Employee Requests
+            <?php if($pendingRequestCount > 0){ ?>
+                <span class="badge danger" style="margin-left: auto; padding: 2px 8px; font-size: 0.7rem;"><?php echo $pendingRequestCount; ?></span>
+            <?php } ?>
         </a>
         <a class="<?php echo ($page=='misconduct-penalty') ? 'active-page' : ''; ?>" href="dashboard.php?page=misconduct-penalty">
             <span>⚠️</span> Log Misconduct
@@ -326,6 +420,8 @@ runMonthlyPenaltyAudit($conn);
         elseif($page == 'hourly-update') include "hourly-update.php";
         elseif($page == 'hourly-submit') include "hourly-submit.php";
         elseif($page == 'penalties') include "penalties.php";
+        elseif($page == 'bonuses') include "bonuses.php";
+        elseif($page == 'employee-requests') include "employee-requests.php";
         elseif($page == 'reports') include "reports.php";
         elseif($page == 'leave-requests') include "leave-requests.php";
         elseif($page == 'misconduct-penalty') include "misconduct-penalty.php";

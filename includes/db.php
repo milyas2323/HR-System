@@ -91,4 +91,71 @@ if ($checkHourlyIp && $checkHourlyIp->num_rows == 0) {
     $conn->query("ALTER TABLE hourly_updates ADD COLUMN device VARCHAR(255) DEFAULT NULL AFTER ip_address");
     $conn->query("ALTER TABLE hourly_updates ADD COLUMN current_location TEXT DEFAULT NULL AFTER device");
 }
+
+// 9. Employee bonuses, applied to an admin-selected payslip month (YYYY-MM)
+$checkBonuses = $conn->query("SHOW TABLES LIKE 'bonuses'");
+if ($checkBonuses && $checkBonuses->num_rows == 0) {
+    $conn->query("CREATE TABLE bonuses (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_id INT NOT NULL,
+        bonus_month VARCHAR(7) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        created_by INT DEFAULT NULL,
+        created_by_name VARCHAR(150) DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_bonus_employee_month (employee_id, bonus_month)
+    )");
+}
+
+// 10. Bonus activity log (who added/removed which bonus, and when)
+$checkBonusLogs = $conn->query("SHOW TABLES LIKE 'bonus_logs'");
+if ($checkBonusLogs && $checkBonusLogs->num_rows == 0) {
+    $conn->query("CREATE TABLE bonus_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        bonus_id INT DEFAULT NULL,
+        employee_id INT NOT NULL,
+        bonus_month VARCHAR(7) DEFAULT NULL,
+        action VARCHAR(30) NOT NULL,
+        amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        message TEXT DEFAULT NULL,
+        performed_by INT DEFAULT NULL,
+        performed_by_name VARCHAR(150) DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_bonus_log_employee (employee_id),
+        KEY idx_bonus_log_month (bonus_month)
+    )");
+}
+
+// 11. Employee requests (late joining, urgent issue, extended break, etc.)
+$checkRequests = $conn->query("SHOW TABLES LIKE 'employee_requests'");
+if ($checkRequests && $checkRequests->num_rows == 0) {
+    $conn->query("CREATE TABLE employee_requests (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_id INT NOT NULL,
+        request_type VARCHAR(50) NOT NULL,
+        subject VARCHAR(255) DEFAULT NULL,
+        details TEXT NOT NULL,
+        request_date DATE DEFAULT NULL,
+        from_time TIME DEFAULT NULL,
+        to_time TIME DEFAULT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        admin_response TEXT DEFAULT NULL,
+        reviewed_by INT DEFAULT NULL,
+        reviewed_by_name VARCHAR(150) DEFAULT NULL,
+        reviewed_at DATETIME DEFAULT NULL,
+        penalty_applied TINYINT(1) NOT NULL DEFAULT 0,
+        penalty_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_request_employee (employee_id),
+        KEY idx_request_status (status)
+    )");
+}
+
+// 12. Penalty tracking on employee requests (rejected/unrequested = PKR 5,000 fine)
+$checkRequestPenalty = $conn->query("SHOW COLUMNS FROM employee_requests LIKE 'penalty_applied'");
+if ($checkRequestPenalty && $checkRequestPenalty->num_rows == 0) {
+    $conn->query("ALTER TABLE employee_requests ADD COLUMN penalty_applied TINYINT(1) NOT NULL DEFAULT 0 AFTER reviewed_at");
+    $conn->query("ALTER TABLE employee_requests ADD COLUMN penalty_amount DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER penalty_applied");
+}
 ?>

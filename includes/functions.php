@@ -1053,7 +1053,10 @@ function grantAdminRelaxationForShiftMissedHourly($conn, $employeeId, $shiftId, 
  */
 function isAutomatedPenaltyReason($reason) {
     $type = classifyPenaltyType($reason);
-    return $type['key'] !== 'manual';
+    // Only the monthly engine-generated rows are recreated on recalc. Everything
+    // else (admin misconduct, request violations) is a stored row that must be
+    // summed and displayed as-is.
+    return in_array($type['key'], ['absence', 'missed_updates'], true);
 }
 
 /**
@@ -1311,6 +1314,12 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
             'count' => 0,
             'total' => 0.0,
         ],
+        'request_violation' => [
+            'label' => 'Unapproved Requests',
+            'description' => 'PKR ' . number_format(REQUEST_VIOLATION_PENALTY_AMOUNT) . ' per unapproved shift change',
+            'count' => 0,
+            'total' => 0.0,
+        ],
         'manual' => [
             'label' => 'Manual / Misconduct',
             'description' => 'Logged by admin',
@@ -1357,6 +1366,15 @@ function classifyPenaltyType($reason) {
             'label' => 'Missed Updates Fine',
             'badge' => 'warning',
             'description' => '3 free per month, then PKR 1,000 each',
+        ];
+    }
+
+    if (strpos($reason, 'unapproved request') !== false) {
+        return [
+            'key' => 'request_violation',
+            'label' => 'Unapproved Request',
+            'badge' => 'danger',
+            'description' => 'PKR ' . number_format(REQUEST_VIOLATION_PENALTY_AMOUNT) . ' — no approved request for a shift change',
         ];
     }
 
@@ -1873,5 +1891,791 @@ function recalculateAllAutomatedPenalties($conn) {
         runMonthlyPenaltyAudit($conn, $cursor);
         $cursor = date('Y-m', strtotime($cursor . '-01 +1 month'));
     }
+}
+
+/* =========================================================
+   BONUSES — admin-added earnings applied to a chosen month
+   ========================================================= */
+
+/**
+ * True when the string is a valid YYYY-MM payslip month key.
+ */
+function isValidPayrollMonthKey($month) {
+    return (bool) preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', (string) $month);
+}
+
+/**
+ * Write one entry into the bonus activity log.
+ */
+function logBonusActivity($conn, $bonusId, $employeeId, $month, $action, $amount, $message, $adminId = null, $adminName = 'Admin') {
+    $stmt = $conn->prepare("
+        INSERT INTO bonus_logs
+            (bonus_id, employee_id, bonus_month, action, amount, message, performed_by, performed_by_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    ");
+    if (!$stmt) {
+        return false;
+    }
+
+    $bonusId = $bonusId > 0 ? (int) $bonusId : null;
+    $employeeId = (int) $employeeId;
+    $amount = floatval($amount);
+    $adminId = $adminId > 0 ? (int) $adminId : null;
+
+    $stmt->bind_param('iissdsis', $bonusId, $employeeId, $month, $action, $amount, $message, $adminId, $adminName);
+    $ok = $stmt->execute();
+    $stmt->close();
+
+    return $ok;
+}
+
+/**
+ * Admin action: add a bonus to a specific payslip month.
+ */
+function processAdminAddBonus($conn, $employeeId, $month, $title, $amount, $adminId = null, $adminName = 'Admin') {
+    $employeeId = (int) $employeeId;
+    $month = trim((string) $month);
+    $title = trim((string) $title);
+    $amount = floatval($amount);
+
+    if ($employeeId <= 0) {
+        return ['success' => false, 'message' => 'Please select an employee.'];
+    }
+    if (!isValidPayrollMonthKey($month)) {
+        return ['success' => false, 'message' => 'Please select a valid bonus month (YYYY-MM).'];
+    }
+    if ($title === '') {
+        return ['success' => false, 'message' => 'Please enter a bonus title / reason.'];
+    }
+    if ($amount <= 0) {
+        return ['success' => false, 'message' => 'Bonus amount must be greater than zero.'];
+    }
+
+    $empRow = $conn->query("SELECT id, name FROM users WHERE id='$employeeId' AND role='employee' LIMIT 1");
+    $emp = $empRow ? $empRow->fetch_assoc() : null;
+    if (!$emp) {
+        return ['success' => false, 'message' => 'Employee record not found.'];
+    }
+
+    $stmt = $conn->prepare("
+        INSERT INTO bonuses (employee_id, bonus_month, title, amount, created_by, created_by_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NOW())
+    ");
+    if (!$stmt) {
+        return ['success' => false, 'message' => 'Could not save the bonus (database error).'];
+    }
+
+    $createdBy = $adminId > 0 ? (int) $adminId : null;
+    $stmt->bind_param('issdis', $employeeId, $month, $title, $amount, $createdBy, $adminName);
+    if (!$stmt->execute()) {
+        $stmt->close();
+        return ['success' => false, 'message' => 'Could not save the bonus (database error).'];
+    }
+    $bonusId = (int) $stmt->insert_id;
+    $stmt->close();
+
+    $monthLabel = date('F Y', strtotime($month . '-01'));
+    $logMessage = 'Bonus of PKR ' . number_format($amount) . ' (' . $title . ') added to '
+        . $emp['name'] . "'s " . $monthLabel . ' salary slip by ' . $adminName . '.';
+    logBonusActivity($conn, $bonusId, $employeeId, $month, 'added', $amount, $logMessage, $adminId, $adminName);
+
+    return [
+        'success' => true,
+        'message' => $logMessage,
+        'bonus_id' => $bonusId,
+    ];
+}
+
+/**
+ * Admin action: remove a bonus and log the removal.
+ */
+function processAdminDeleteBonus($conn, $bonusId, $adminId = null, $adminName = 'Admin') {
+    $bonusId = (int) $bonusId;
+    if ($bonusId <= 0) {
+        return ['success' => false, 'message' => 'Invalid bonus reference.'];
+    }
+
+    $result = $conn->query("
+        SELECT b.*, u.name AS employee_name
+        FROM bonuses b
+        LEFT JOIN users u ON u.id = b.employee_id
+        WHERE b.id='$bonusId'
+        LIMIT 1
+    ");
+    $bonus = $result ? $result->fetch_assoc() : null;
+    if (!$bonus) {
+        return ['success' => false, 'message' => 'Bonus entry not found.'];
+    }
+
+    if (!$conn->query("DELETE FROM bonuses WHERE id='$bonusId'")) {
+        return ['success' => false, 'message' => 'Could not remove the bonus (database error).'];
+    }
+
+    $amount = floatval($bonus['amount']);
+    $monthLabel = date('F Y', strtotime($bonus['bonus_month'] . '-01'));
+    $logMessage = 'Bonus of PKR ' . number_format($amount) . ' (' . $bonus['title'] . ') removed from '
+        . ($bonus['employee_name'] ?? 'employee') . "'s " . $monthLabel . ' salary slip by ' . $adminName . '.';
+    logBonusActivity($conn, 0, (int) $bonus['employee_id'], $bonus['bonus_month'], 'removed', $amount, $logMessage, $adminId, $adminName);
+
+    return ['success' => true, 'message' => $logMessage];
+}
+
+/**
+ * Bonus rows for one employee. Pass $month = null for all-time history.
+ */
+function getEmployeeBonusRows($conn, $employeeId, $month = null) {
+    $employeeId = (int) $employeeId;
+    $sql = "SELECT id, employee_id, bonus_month, title, amount, created_by_name, created_at
+            FROM bonuses
+            WHERE employee_id='$employeeId'";
+
+    if ($month !== null) {
+        if (!isValidPayrollMonthKey($month)) {
+            return [];
+        }
+        $sql .= " AND bonus_month='" . mysqli_real_escape_string($conn, $month) . "'";
+    }
+
+    $sql .= ' ORDER BY bonus_month DESC, created_at DESC, id DESC';
+
+    $rows = [];
+    $result = $conn->query($sql);
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
+/**
+ * Bonus total for one employee. Pass $month = null for the all-time total.
+ */
+function getEmployeeBonusTotal($conn, $employeeId, $month = null) {
+    $employeeId = (int) $employeeId;
+    $sql = "SELECT COALESCE(SUM(amount), 0) AS total FROM bonuses WHERE employee_id='$employeeId'";
+
+    if ($month !== null) {
+        if (!isValidPayrollMonthKey($month)) {
+            return 0.0;
+        }
+        $sql .= " AND bonus_month='" . mysqli_real_escape_string($conn, $month) . "'";
+    }
+
+    $result = $conn->query($sql);
+    $row = $result ? $result->fetch_assoc() : null;
+
+    return floatval($row['total'] ?? 0);
+}
+
+/**
+ * Per-month bonus totals for one employee (newest month first).
+ */
+function getEmployeeBonusMonthlyTotals($conn, $employeeId) {
+    $employeeId = (int) $employeeId;
+    $months = [];
+    $result = $conn->query("
+        SELECT bonus_month, COUNT(*) AS entries, SUM(amount) AS total
+        FROM bonuses
+        WHERE employee_id='$employeeId'
+        GROUP BY bonus_month
+        ORDER BY bonus_month DESC
+    ");
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $months[] = [
+                'month' => $row['bonus_month'],
+                'label' => date('F Y', strtotime($row['bonus_month'] . '-01')),
+                'entries' => (int) $row['entries'],
+                'total' => floatval($row['total']),
+            ];
+        }
+    }
+
+    return $months;
+}
+
+/**
+ * Bonus totals for the whole workforce in a given month.
+ */
+function getWorkforceBonusTotals($conn, $month) {
+    $byEmployee = [];
+    $total = 0.0;
+
+    if (!isValidPayrollMonthKey($month)) {
+        return ['total' => 0.0, 'by_employee' => []];
+    }
+
+    $result = $conn->query("
+        SELECT employee_id, SUM(amount) AS total
+        FROM bonuses
+        WHERE bonus_month='" . mysqli_real_escape_string($conn, $month) . "'
+        GROUP BY employee_id
+    ");
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $amount = floatval($row['total']);
+            $byEmployee[(int) $row['employee_id']] = $amount;
+            $total += $amount;
+        }
+    }
+
+    return ['total' => $total, 'by_employee' => $byEmployee];
+}
+
+/**
+ * Bonus rows for a month across all employees (admin listing).
+ */
+function getBonusesForMonth($conn, $month) {
+    if (!isValidPayrollMonthKey($month)) {
+        return [];
+    }
+
+    $rows = [];
+    $result = $conn->query("
+        SELECT b.*, u.name AS employee_name, u.email AS employee_email
+        FROM bonuses b
+        LEFT JOIN users u ON u.id = b.employee_id
+        WHERE b.bonus_month='" . mysqli_real_escape_string($conn, $month) . "'
+        ORDER BY b.created_at DESC, b.id DESC
+    ");
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
+/* =========================================================
+   EMPLOYEE REQUESTS — late joining, urgent issues, breaks
+   ========================================================= */
+
+// Fine applied when one of these shift changes happens without an approved request.
+define('REQUEST_VIOLATION_PENALTY_AMOUNT', 5000);
+
+/**
+ * Log a penalty against a specific date (not "now"), so back-dated violations
+ * land on the correct payslip month.
+ */
+function addPenaltyOnDate($conn, $employeeId, $reason, $amount, $penaltyDate = null) {
+    $employeeId = (int) $employeeId;
+    $amount = floatval($amount);
+    $reasonEsc = mysqli_real_escape_string($conn, $reason);
+
+    $timestamp = ($penaltyDate !== null && strtotime($penaltyDate) !== false)
+        ? date('Y-m-d H:i:s', strtotime($penaltyDate))
+        : date('Y-m-d H:i:s');
+    $timestampEsc = mysqli_real_escape_string($conn, $timestamp);
+
+    $conn->query("INSERT INTO penalties (employee_id, reason, amount, created_at)
+                  VALUES ('$employeeId', '$reasonEsc', '$amount', '$timestampEsc')");
+
+    $conn->query("UPDATE users
+                  SET total_deduction = total_deduction + $amount
+                  WHERE id='$employeeId'");
+
+    return (int) $conn->insert_id;
+}
+
+/**
+ * Canonical penalty reason for an unapproved request, e.g.
+ * "Unapproved Request — Late Joining [2026-08-04]".
+ * The ISO date in brackets makes the row matchable for waiving.
+ */
+function buildRequestViolationReason($typeKey, $date) {
+    $label = getEmployeeRequestTypeMeta($typeKey)['label'];
+    $iso = (strtotime((string) $date) !== false) ? date('Y-m-d', strtotime($date)) : date('Y-m-d');
+
+    return 'Unapproved Request — ' . $label . ' [' . $iso . ']';
+}
+
+/**
+ * Find an existing request-violation penalty for one employee/type/date.
+ */
+function findRequestViolationPenalty($conn, $employeeId, $typeKey, $date) {
+    $employeeId = (int) $employeeId;
+    $reason = mysqli_real_escape_string($conn, buildRequestViolationReason($typeKey, $date));
+
+    $result = $conn->query("
+        SELECT id, amount
+        FROM penalties
+        WHERE employee_id='$employeeId'
+        AND reason='$reason'
+        LIMIT 1
+    ");
+
+    return $result ? $result->fetch_assoc() : null;
+}
+
+/**
+ * Apply the PKR 5,000 fine for a shift change made without an approved request.
+ * Idempotent: the same employee/type/date is never fined twice.
+ */
+function applyRequestViolationPenalty($conn, $employeeId, $typeKey, $date, $appliedBy = 'Admin') {
+    $employeeId = (int) $employeeId;
+
+    if ($employeeId <= 0) {
+        return ['success' => false, 'applied' => false, 'message' => 'Invalid employee reference.'];
+    }
+    if (!array_key_exists($typeKey, getEmployeeRequestTypes())) {
+        return ['success' => false, 'applied' => false, 'message' => 'Invalid request type.'];
+    }
+    if (strtotime((string) $date) === false) {
+        return ['success' => false, 'applied' => false, 'message' => 'Invalid violation date.'];
+    }
+
+    $label = getEmployeeRequestTypeMeta($typeKey)['label'];
+    $isoDate = date('Y-m-d', strtotime($date));
+
+    if (findRequestViolationPenalty($conn, $employeeId, $typeKey, $isoDate)) {
+        return [
+            'success' => true,
+            'applied' => false,
+            'message' => $label . ' penalty is already recorded for ' . date('d M Y', strtotime($isoDate)) . '.',
+        ];
+    }
+
+    $reason = buildRequestViolationReason($typeKey, $isoDate);
+    addPenaltyOnDate($conn, $employeeId, $reason, REQUEST_VIOLATION_PENALTY_AMOUNT, $isoDate . ' ' . date('H:i:s'));
+
+    return [
+        'success' => true,
+        'applied' => true,
+        'amount' => REQUEST_VIOLATION_PENALTY_AMOUNT,
+        'message' => 'PKR ' . number_format(REQUEST_VIOLATION_PENALTY_AMOUNT) . ' penalty applied for unapproved '
+            . $label . ' on ' . date('d M Y', strtotime($isoDate)) . '.',
+    ];
+}
+
+/**
+ * Remove a request-violation fine (used when a request is approved after the
+ * fine was already logged).
+ */
+function waiveRequestViolationPenalty($conn, $employeeId, $typeKey, $date) {
+    $employeeId = (int) $employeeId;
+    $existing = findRequestViolationPenalty($conn, $employeeId, $typeKey, $date);
+
+    if (!$existing) {
+        return ['success' => true, 'waived' => false, 'message' => ''];
+    }
+
+    $penaltyId = (int) $existing['id'];
+    $amount = floatval($existing['amount']);
+
+    $conn->query("DELETE FROM penalties WHERE id='$penaltyId'");
+    $conn->query("UPDATE users
+                  SET total_deduction = GREATEST(total_deduction - $amount, 0)
+                  WHERE id='$employeeId'");
+
+    return [
+        'success' => true,
+        'waived' => true,
+        'amount' => $amount,
+        'message' => 'PKR ' . number_format($amount) . ' penalty waived.',
+    ];
+}
+
+/**
+ * Supported request categories, keyed by the value stored in the DB.
+ */
+function getEmployeeRequestTypes() {
+    return [
+        'late_joining' => [
+            'label' => 'Late Joining',
+            'icon' => '🕐',
+            'hint' => 'You will start your shift later than the scheduled time.',
+        ],
+        'urgent_issue' => [
+            'label' => 'Urgent Issue',
+            'icon' => '🚨',
+            'hint' => 'Emergency or blocker that affects your shift today.',
+        ],
+        'extended_break' => [
+            'label' => 'Extended Break',
+            'icon' => '☕',
+            'hint' => 'A break longer than the standard allowance.',
+        ],
+        'early_leave' => [
+            'label' => 'Early Sign-off',
+            'icon' => '🏃',
+            'hint' => 'You need to close your shift before the end time.',
+        ],
+        'change_workstation' => [
+            'label' => 'Change Workstation',
+            'icon' => '🖥️',
+            'hint' => 'Working from a different desk, system, office or location. Mention the new location in the details.',
+        ],
+        'other' => [
+            'label' => 'Other Request',
+            'icon' => '📌',
+            'hint' => 'Anything not covered by the categories above.',
+        ],
+    ];
+}
+
+/**
+ * Display metadata for one request type (falls back to a generic label).
+ */
+function getEmployeeRequestTypeMeta($typeKey) {
+    $types = getEmployeeRequestTypes();
+    if (isset($types[$typeKey])) {
+        return $types[$typeKey];
+    }
+
+    return ['label' => ucwords(str_replace('_', ' ', (string) $typeKey)), 'icon' => '📌', 'hint' => ''];
+}
+
+/**
+ * Badge class for a request status.
+ */
+function getEmployeeRequestStatusBadge($status) {
+    $status = strtolower(trim((string) $status));
+    if ($status === 'approved') {
+        return 'success';
+    }
+    if ($status === 'rejected') {
+        return 'danger';
+    }
+    return 'warning';
+}
+
+/**
+ * Employee action: submit a new request for admin approval.
+ */
+function processEmployeeRequestSubmission($conn, $employeeId, $type, $subject, $details, $requestDate, $fromTime = '', $toTime = '') {
+    $employeeId = (int) $employeeId;
+    $type = trim((string) $type);
+    $subject = trim((string) $subject);
+    $details = trim((string) $details);
+    $requestDate = trim((string) $requestDate);
+    $fromTime = trim((string) $fromTime);
+    $toTime = trim((string) $toTime);
+    $result = ['success' => false, 'message' => '', 'messageType' => 'danger'];
+
+    if (!array_key_exists($type, getEmployeeRequestTypes())) {
+        $result['message'] = 'Please choose a valid request type.';
+        return $result;
+    }
+
+    if ($details === '') {
+        $result['message'] = 'Please describe your request so the admin can review it.';
+        return $result;
+    }
+
+    if ($requestDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $requestDate) || strtotime($requestDate) === false) {
+        $result['message'] = 'Please select the date this request applies to.';
+        return $result;
+    }
+
+    if ($fromTime !== '' && $toTime !== '' && strtotime($fromTime) > strtotime($toTime)) {
+        $result['message'] = "The 'From Time' must be before or equal to the 'To Time'.";
+        return $result;
+    }
+
+    if ($subject === '') {
+        $subject = getEmployeeRequestTypeMeta($type)['label'];
+    }
+
+    $stmt = $conn->prepare("
+        INSERT INTO employee_requests
+            (employee_id, request_type, subject, details, request_date, from_time, to_time, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
+    ");
+    if (!$stmt) {
+        $result['message'] = 'Database Error: ' . $conn->error;
+        return $result;
+    }
+
+    $fromTimeValue = ($fromTime !== '') ? $fromTime : null;
+    $toTimeValue = ($toTime !== '') ? $toTime : null;
+    $stmt->bind_param('issssss', $employeeId, $type, $subject, $details, $requestDate, $fromTimeValue, $toTimeValue);
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+        $result['message'] = 'Database Error: ' . $conn->error;
+        return $result;
+    }
+    $stmt->close();
+
+    $result['success'] = true;
+    $result['messageType'] = 'success';
+    $result['message'] = getEmployeeRequestTypeMeta($type)['label']
+        . ' request submitted for ' . date('d M Y', strtotime($requestDate)) . '. Waiting for admin approval.';
+
+    return $result;
+}
+
+/**
+ * Admin action: approve or reject an employee request, with optional remarks.
+ */
+function processAdminEmployeeRequestAction($conn, $requestId, $action, $remarks = '', $adminId = null, $adminName = 'Admin', $applyPenalty = true) {
+    $requestId = (int) $requestId;
+    $action = strtolower(trim((string) $action));
+    $remarks = trim((string) $remarks);
+
+    if (!in_array($action, ['approved', 'rejected'], true)) {
+        return ['success' => false, 'message' => 'Invalid request action.'];
+    }
+    if ($requestId <= 0) {
+        return ['success' => false, 'message' => 'Invalid request reference.'];
+    }
+
+    $result = $conn->query("
+        SELECT r.*, u.name AS employee_name
+        FROM employee_requests r
+        LEFT JOIN users u ON u.id = r.employee_id
+        WHERE r.id='$requestId'
+        LIMIT 1
+    ");
+    $request = $result ? $result->fetch_assoc() : null;
+    if (!$request) {
+        return ['success' => false, 'message' => 'Request not found.'];
+    }
+
+    if (strtolower(trim($request['status'])) !== 'pending') {
+        return [
+            'success' => false,
+            'message' => 'This request was already ' . strtolower($request['status']) . '.',
+        ];
+    }
+
+    if ($remarks === '') {
+        $remarks = ($action === 'approved')
+            ? 'Approved by ' . $adminName . '.'
+            : 'Rejected by ' . $adminName . '.';
+    }
+
+    $employeeId = (int) $request['employee_id'];
+    $typeKey = $request['request_type'];
+    $violationDate = !empty($request['request_date']) ? $request['request_date'] : date('Y-m-d');
+
+    // Rejected = the shift change was not authorised, so the standard fine applies.
+    // Approved = clear any fine already logged for that employee/type/date.
+    $penaltyNote = '';
+    $penaltyApplied = 0;
+    $penaltyAmount = 0.0;
+
+    if ($action === 'rejected' && $applyPenalty) {
+        $penaltyResult = applyRequestViolationPenalty($conn, $employeeId, $typeKey, $violationDate, $adminName);
+        if (!empty($penaltyResult['applied'])) {
+            $penaltyApplied = 1;
+            $penaltyAmount = floatval($penaltyResult['amount']);
+            $penaltyNote = ' ' . $penaltyResult['message'];
+            $remarks .= ' (Penalty: PKR ' . number_format($penaltyAmount) . ')';
+        }
+    } elseif ($action === 'approved') {
+        $waiveResult = waiveRequestViolationPenalty($conn, $employeeId, $typeKey, $violationDate);
+        if (!empty($waiveResult['waived'])) {
+            $penaltyNote = ' ' . $waiveResult['message'];
+            $remarks .= ' (Previously logged penalty waived)';
+        }
+    }
+
+    $stmt = $conn->prepare("
+        UPDATE employee_requests
+        SET status=?, admin_response=?, reviewed_by=?, reviewed_by_name=?, reviewed_at=NOW(),
+            penalty_applied=?, penalty_amount=?
+        WHERE id=? AND status='pending'
+    ");
+    if (!$stmt) {
+        return ['success' => false, 'message' => 'Could not update the request (database error).'];
+    }
+
+    $reviewerId = $adminId > 0 ? (int) $adminId : null;
+    $stmt->bind_param('ssisidi', $action, $remarks, $reviewerId, $adminName, $penaltyApplied, $penaltyAmount, $requestId);
+    if (!$stmt->execute()) {
+        $stmt->close();
+        return ['success' => false, 'message' => 'Could not update the request (database error).'];
+    }
+    $stmt->close();
+
+    $typeLabel = getEmployeeRequestTypeMeta($typeKey)['label'];
+
+    return [
+        'success' => true,
+        'penalty_applied' => (bool) $penaltyApplied,
+        'message' => $typeLabel . ' request from ' . ($request['employee_name'] ?? 'employee')
+            . ' has been ' . $action . '.' . $penaltyNote,
+    ];
+}
+
+/**
+ * Admin: log a shift change that happened with no request at all, and fine it.
+ */
+function processAdminUnrequestedViolation($conn, $employeeId, $typeKey, $date, $note = '', $adminId = null, $adminName = 'Admin') {
+    $employeeId = (int) $employeeId;
+    $date = trim((string) $date);
+    $note = trim((string) $note);
+
+    if ($employeeId <= 0) {
+        return ['success' => false, 'message' => 'Please select an employee.'];
+    }
+    if (!array_key_exists($typeKey, getEmployeeRequestTypes())) {
+        return ['success' => false, 'message' => 'Please choose a valid violation type.'];
+    }
+    if ($date === '' || strtotime($date) === false) {
+        return ['success' => false, 'message' => 'Please select the date the violation happened.'];
+    }
+
+    $empRow = $conn->query("SELECT id, name FROM users WHERE id='$employeeId' AND role='employee' LIMIT 1");
+    $emp = $empRow ? $empRow->fetch_assoc() : null;
+    if (!$emp) {
+        return ['success' => false, 'message' => 'Employee record not found.'];
+    }
+
+    $isoDate = date('Y-m-d', strtotime($date));
+    $label = getEmployeeRequestTypeMeta($typeKey)['label'];
+
+    // An approved request for the same day means this was authorised after all.
+    $approved = $conn->query("
+        SELECT id FROM employee_requests
+        WHERE employee_id='$employeeId'
+        AND request_type='" . mysqli_real_escape_string($conn, $typeKey) . "'
+        AND request_date='" . mysqli_real_escape_string($conn, $isoDate) . "'
+        AND status='approved'
+        LIMIT 1
+    ");
+    if ($approved && $approved->num_rows > 0) {
+        return [
+            'success' => false,
+            'message' => $emp['name'] . ' already has an approved ' . $label . ' request for '
+                . date('d M Y', strtotime($isoDate)) . '. No penalty applied.',
+        ];
+    }
+
+    $penaltyResult = applyRequestViolationPenalty($conn, $employeeId, $typeKey, $isoDate, $adminName);
+    if (!$penaltyResult['success']) {
+        return ['success' => false, 'message' => $penaltyResult['message']];
+    }
+    if (empty($penaltyResult['applied'])) {
+        return ['success' => false, 'message' => $penaltyResult['message']];
+    }
+
+    // Record it as a rejected request so it shows in the employee's own history.
+    $subject = 'Unrequested ' . $label;
+    $details = ($note !== '')
+        ? $note
+        : $label . ' on ' . date('d M Y', strtotime($isoDate)) . ' without submitting a request.';
+    $response = 'Logged by ' . $adminName . ' — no request was submitted. Penalty: PKR '
+        . number_format(REQUEST_VIOLATION_PENALTY_AMOUNT) . '.';
+
+    $stmt = $conn->prepare("
+        INSERT INTO employee_requests
+            (employee_id, request_type, subject, details, request_date, status,
+             admin_response, reviewed_by, reviewed_by_name, reviewed_at,
+             penalty_applied, penalty_amount, created_at)
+        VALUES (?, ?, ?, ?, ?, 'rejected', ?, ?, ?, NOW(), 1, ?, NOW())
+    ");
+    if ($stmt) {
+        $reviewerId = $adminId > 0 ? (int) $adminId : null;
+        $amount = (float) REQUEST_VIOLATION_PENALTY_AMOUNT;
+        $stmt->bind_param('isssssisd', $employeeId, $typeKey, $subject, $details, $isoDate, $response, $reviewerId, $adminName, $amount);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    return [
+        'success' => true,
+        'message' => $emp['name'] . ': ' . $penaltyResult['message'],
+    ];
+}
+
+/**
+ * Fetch employee requests. Pass $employeeId = null for all employees,
+ * $status = null (or 'all') for every status.
+ */
+function getEmployeeRequests($conn, $employeeId = null, $status = null, $limit = 0) {
+    $where = [];
+
+    if ($employeeId !== null) {
+        $where[] = "r.employee_id='" . (int) $employeeId . "'";
+    }
+
+    $status = strtolower(trim((string) $status));
+    if ($status !== '' && $status !== 'all' && in_array($status, ['pending', 'approved', 'rejected'], true)) {
+        $where[] = "r.status='" . mysqli_real_escape_string($conn, $status) . "'";
+    }
+
+    $sql = "SELECT r.*, u.name AS employee_name, u.email AS employee_email
+            FROM employee_requests r
+            LEFT JOIN users u ON u.id = r.employee_id";
+
+    if (count($where) > 0) {
+        $sql .= ' WHERE ' . implode(' AND ', $where);
+    }
+
+    // Pending first, then newest.
+    $sql .= " ORDER BY (r.status='pending') DESC, r.request_date DESC, r.id DESC";
+
+    $limit = (int) $limit;
+    if ($limit > 0) {
+        $sql .= " LIMIT $limit";
+    }
+
+    $rows = [];
+    $result = $conn->query($sql);
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
+/**
+ * Request counts per status. Pass $employeeId = null for the whole workforce.
+ */
+function getEmployeeRequestStatusCounts($conn, $employeeId = null) {
+    $counts = ['pending' => 0, 'approved' => 0, 'rejected' => 0, 'total' => 0];
+
+    $sql = "SELECT status, COUNT(*) AS total FROM employee_requests";
+    if ($employeeId !== null) {
+        $sql .= " WHERE employee_id='" . (int) $employeeId . "'";
+    }
+    $sql .= ' GROUP BY status';
+
+    $result = $conn->query($sql);
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $key = strtolower(trim($row['status']));
+            $total = (int) $row['total'];
+            if (isset($counts[$key])) {
+                $counts[$key] = $total;
+            }
+            $counts['total'] += $total;
+        }
+    }
+
+    return $counts;
+}
+
+/**
+ * Recent bonus activity log entries. Pass $month = null for all months.
+ */
+function getBonusActivityLog($conn, $limit = 20, $month = null) {
+    $limit = max(1, (int) $limit);
+    $sql = "SELECT l.*, u.name AS employee_name
+            FROM bonus_logs l
+            LEFT JOIN users u ON u.id = l.employee_id";
+
+    if ($month !== null && isValidPayrollMonthKey($month)) {
+        $sql .= " WHERE l.bonus_month='" . mysqli_real_escape_string($conn, $month) . "'";
+    }
+
+    $sql .= " ORDER BY l.id DESC LIMIT $limit";
+
+    $rows = [];
+    $result = $conn->query($sql);
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
 }
 ?>

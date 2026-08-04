@@ -199,3 +199,24 @@ Append-only log of significant work. Newest entries at the **top**.
 - **Summary:** Employee payslip still read stale `penalties` table; dashboard Salary Deductions showed `total_deduction` from users table only.
 - **Outcome:** Payslip uses `buildEmployeePenaltyReportRows()`; dashboard shows current month and all-time live fine totals via `calculateEmployeeDynamicPenalties()`.
 - **Follow-ups:** None.
+
+### 2026-08-04 — Bonuses: admin entry, payslip credit, employee visibility
+
+- **Scope:** `includes/db.php`, `database/migration.sql`, `includes/functions.php`, `admin/bonuses.php` (new), `admin/dashboard.php`, `admin/salary-slip.php`, `admin/penalties.php`, `employee/salary-slip.php`, `employee/dashboard.php`
+- **Summary:** No way to credit an employee for a bonus; payslips only ever subtracted fines.
+- **Outcome:** New `bonuses` table keyed by `bonus_month` (YYYY-MM) so admin picks the target slip month explicitly, plus `bonus_logs` audit trail. Admin-only "Add Bonuses" page (add/remove + activity log). Bonuses appear as earnings rows on both admin and employee payslips; net = salary + bonuses − fines everywhere, including the Salaries & Deduct payout sheet. Employee dashboard gained a Bonuses card (all-time + current month) and an all-time bonus history table.
+- **Follow-ups:** Bonuses are excluded from `users.total_deduction` and the penalty engine by design — they are a separate ledger, not a negative penalty.
+
+### 2026-08-04 — Employee requests with admin approval
+
+- **Scope:** `includes/db.php`, `database/migration.sql`, `includes/functions.php`, `employee/add-request.php` (new), `employee/dashboard.php`, `admin/employee-requests.php` (new), `admin/dashboard.php`
+- **Summary:** Employees had no channel for shift-affecting asks (late joining, urgent issue, extended break) — only full-day leave requests existed.
+- **Outcome:** New `employee_requests` table with six categories (late joining, urgent issue, extended break, early sign-off, WFH, other), date + optional time window, and inline review fields (`admin_response`, `reviewed_by`, `reviewed_at`). Employee "Add Request" page submits and tracks own requests with admin remarks; admin "Employee Requests" page filters by status, approves/rejects with optional remarks, and shows a pending count badge in the sidebar. Already-processed requests cannot be re-decided.
+- **Follow-ups:** Approved requests are informational only — the penalty engine does not yet auto-waive fines for an approved late-joining/absence request. Admin relaxation tools in `reports.php` remain the manual path.
+
+### 2026-08-04 — Request penalties (PKR 5,000) + Change Workstation type
+
+- **Scope:** `includes/db.php`, `database/migration.sql`, `includes/functions.php`, `admin/employee-requests.php`, `admin/dashboard.php`, `employee/add-request.php`, `employee/dashboard.php`
+- **Summary:** Requests were informational only; unapproved shift changes carried no consequence. Also replaced the Work From Home type with Change Workstation.
+- **Outcome:** `REQUEST_VIOLATION_PENALTY_AMOUNT` (5000) fines unapproved shift changes via two deterministic triggers — rejecting a request (admin can untick), and an admin "Log Unrequested Violation" form for cases with no request. Approving waives any fine already logged for that employee/type/date. Fines are idempotent per employee+type+date and back-date to the violation day so they land on the right payslip month. New `request_violation` penalty class; `isAutomatedPenaltyReason()` now treats only absence/missed_updates as engine-generated so stored violation rows are summed and displayed rather than skipped. Caution banners on employee dashboard home, employee Add Request, and admin Employee Requests.
+- **Follow-ups:** Late joining is NOT auto-detected — there is no per-employee scheduled shift start in the schema to compare `shifts.start_time` against. Adding one to `admin/settings.php` would let the engine flag late joins automatically.

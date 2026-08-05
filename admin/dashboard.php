@@ -123,6 +123,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['short_hours_relaxatio
     exit();
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['penalty_row_action'])) {
+    $penaltyId = (int) ($_POST['penalty_id'] ?? 0);
+    $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    $penaltyAction = $_POST['penalty_row_action'];
+    $adminName = $_SESSION['user']['name'] ?? 'Admin';
+
+    if ($penaltyId > 0) {
+        if ($penaltyAction === 'waive') {
+            $actionResult = waiveStoredPenalty($conn, $penaltyId, $adminName, $_POST['waive_note'] ?? '');
+        } elseif ($penaltyAction === 'restore') {
+            $actionResult = restoreStoredPenalty($conn, $penaltyId);
+        } elseif ($penaltyAction === 'delete') {
+            $actionResult = deleteStoredPenalty($conn, $penaltyId);
+        } else {
+            $actionResult = ['message' => 'Unknown penalty action.'];
+        }
+        $_SESSION['msg'] = $actionResult['message'];
+    } else {
+        $_SESSION['msg'] = 'Invalid penalty reference.';
+    }
+
+    $redirect = 'dashboard.php?page=reports&employee_id=' . $grantEmployeeId;
+    if (!empty($_POST['date_from']) && !empty($_POST['date_to'])) {
+        $redirect .= '&date_from=' . urlencode($_POST['date_from']) . '&date_to=' . urlencode($_POST['date_to']);
+    }
+    if (!empty($_POST['hourly_all'])) {
+        $redirect .= '&hourly_all=1';
+    } elseif (!empty($_POST['hourly_from']) && !empty($_POST['hourly_to'])) {
+        $redirect .= '&hourly_from=' . urlencode($_POST['hourly_from']) . '&hourly_to=' . urlencode($_POST['hourly_to']);
+    }
+    if (!empty($_POST['hourly_sort']) && $_POST['hourly_sort'] === 'asc') {
+        $redirect .= '&hourly_sort=asc';
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxation_month'])) {
     $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
     $penaltyMonth = trim($_POST['penalty_month'] ?? '');

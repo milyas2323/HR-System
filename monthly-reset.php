@@ -13,6 +13,7 @@ SELECT
     COUNT(*),
     '$month'
 FROM penalties
+WHERE waived = 0
 GROUP BY employee_id
 ");
 

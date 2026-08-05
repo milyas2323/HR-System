@@ -18,6 +18,7 @@ if($check->num_rows > 0){
 $data = $conn->query("
     SELECT employee_id, SUM(amount) as total
     FROM penalties
+    WHERE waived = 0
     GROUP BY employee_id
 ");
 

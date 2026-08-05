@@ -181,7 +181,7 @@ function reportsPreserveQueryHiddenFields($employeeId, $dateFilterActive, $dateF
 
 function reportsGetPenaltySum($conn, $employeeId, $month = null) {
     $employeeId = (int) $employeeId;
-    $sql = "SELECT COALESCE(SUM(amount), 0) AS total FROM penalties WHERE employee_id='$employeeId'";
+    $sql = "SELECT COALESCE(SUM(amount), 0) AS total FROM penalties WHERE employee_id='$employeeId' AND waived = 0";
     if ($month !== null) {
         $month = mysqli_real_escape_string($conn, $month);
         $sql .= " AND DATE_FORMAT(created_at, '%Y-%m')='$month'";
@@ -384,6 +384,8 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         $penaltyRows = $penaltyReport['rows'];
         $penaltyBreakdown = $penaltyReport['breakdown'];
         $penaltyBreakdownTotal = $penaltyReport['total'];
+        $penaltyWaivedTotal = $penaltyReport['waived_total'];
+        $penaltyWaivedCount = $penaltyReport['waived_count'];
         $detailPenaltyData = $penaltyReport['dynamic'];
 
         $totalPenaltyAllTime = reportsGetPenaltySum($conn, $employee_id);
@@ -535,6 +537,8 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             so a full workday spans <strong><?php echo formatWorkDuration(SHIFT_REQUIRED_SPAN_SECONDS); ?></strong>.
             Closed weekday shifts below that are fined PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?> each,
             unless an <em>Early Sign-off</em> or <em>Extended Break</em> request was approved for that day.
+            Admin-logged fines (misconduct, unapproved requests) can be <strong>waived off</strong> from the Action column —
+            the record stays for audit but nothing is charged — or <strong>deleted</strong> permanently.
         </p>
 
         <?php if ($pendingMonthMissed > 0) { ?>
@@ -567,6 +571,16 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     </p>
                 </div>
             <?php } ?>
+            <?php if ($penaltyWaivedCount > 0) { ?>
+                <div class="card stat-box" style="margin-bottom: 0; border-bottom: 4px solid var(--success);">
+                    <h4>Waived Off</h4>
+                    <h2 style="color: var(--success); font-size: 1.5rem;">PKR <?php echo number_format($penaltyWaivedTotal); ?></h2>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">
+                        <?php echo (int) $penaltyWaivedCount; ?> record<?php echo $penaltyWaivedCount === 1 ? '' : 's'; ?>
+                        · Cancelled by admin, not charged
+                    </p>
+                </div>
+            <?php } ?>
             <div class="card stat-box" style="margin-bottom: 0; background: rgba(239, 68, 68, 0.08);">
                 <h4>Total<?php echo $dateFilterActive ? ' (in range)' : ' (all-time)'; ?></h4>
                 <h2 style="color: var(--danger);">PKR <?php echo number_format($penaltyBreakdownTotal); ?></h2>
@@ -580,32 +594,87 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     <th>Category</th>
                     <th>Reason / Detail</th>
                     <th>Amount</th>
+                    <th>Action</th>
                 </tr>
                 <?php if (count($penaltyRows) > 0) {
                     foreach ($penaltyRows as $pRow) {
                         $pType = $pRow['type'];
+                        $pIsStored = empty($pRow['dynamic']) && (int) $pRow['id'] > 0;
+                        $pIsWaived = !empty($pRow['waived']);
+                        $pAmountLabel = 'PKR ' . number_format(floatval($pRow['amount']));
+                        $pDateLabel = date('d M Y', strtotime($pRow['created_at']));
                 ?>
                     <tr>
                         <td style="white-space: nowrap; font-size: 0.85rem;">
-                            <?php echo date('d M Y', strtotime($pRow['created_at'])); ?>
+                            <?php echo $pDateLabel; ?>
                             <div style="color: var(--text-muted); font-size: 0.75rem;"><?php echo date('h:i A', strtotime($pRow['created_at'])); ?></div>
                         </td>
                         <td>
                             <span class="badge <?php echo htmlspecialchars($pType['badge']); ?>">
                                 <?php echo htmlspecialchars($pType['label']); ?>
                             </span>
+                            <?php if ($pIsWaived) { ?>
+                                <div style="margin-top: 6px;"><span class="badge success">Waived</span></div>
+                            <?php } ?>
                         </td>
                         <td style="max-width: 400px; line-height: 1.5; word-wrap: break-word;">
                             <?php echo htmlspecialchars($pRow['reason']); ?>
+                            <?php if ($pIsWaived) { ?>
+                                <div style="margin-top: 6px; font-size: 0.75rem; color: var(--success);">
+                                    Waived by <?php echo htmlspecialchars($pRow['waived_by'] ?: 'Admin'); ?>
+                                    <?php echo !empty($pRow['waived_at']) ? ' on ' . date('d M Y', strtotime($pRow['waived_at'])) : ''; ?>
+                                    <?php echo !empty($pRow['waive_note']) ? ' — ' . htmlspecialchars($pRow['waive_note']) : ''; ?>
+                                </div>
+                            <?php } ?>
                         </td>
-                        <td style="color: var(--danger); font-weight: 700; white-space: nowrap;">
-                            PKR <?php echo number_format(floatval($pRow['amount'])); ?>
+                        <td style="font-weight: 700; white-space: nowrap; color: <?php echo $pIsWaived ? 'var(--text-muted)' : 'var(--danger)'; ?>;">
+                            <?php if ($pIsWaived) { ?>
+                                <span style="text-decoration: line-through;"><?php echo $pAmountLabel; ?></span>
+                                <div style="color: var(--success); font-size: 0.75rem; font-weight: 600;">PKR 0 charged</div>
+                            <?php } else {
+                                echo $pAmountLabel;
+                            } ?>
+                        </td>
+                        <td>
+                            <?php if (!$pIsStored) { ?>
+                                <span style="color: var(--text-muted); font-size: 0.8rem;">Auto — waive in daily log</span>
+                            <?php } else {
+                                $pWaiveConfirm = $pIsWaived
+                                    ? 'Re-apply the ' . $pAmountLabel . ' fine from ' . $pDateLabel . '?'
+                                    : 'Waive off the ' . $pAmountLabel . ' fine from ' . $pDateLabel . '? The record is kept but nothing is charged.';
+                                $pDeleteConfirm = 'Permanently delete the ' . $pAmountLabel . ' fine from ' . $pDateLabel . '? This cannot be undone — use Waive off if you want to keep the record.';
+                            ?>
+                                <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+                                    <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('<?php echo htmlspecialchars($pWaiveConfirm, ENT_QUOTES); ?>');">
+                                        <input type="hidden" name="penalty_row_action" value="<?php echo $pIsWaived ? 'restore' : 'waive'; ?>">
+                                        <input type="hidden" name="penalty_id" value="<?php echo (int) $pRow['id']; ?>">
+                                        <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                                        <?php reportsPreserveQueryHiddenFields($employee_id, $dateFilterActive, $date_from, $date_to, $hourlyDateFilterActive, $hourly_from, $hourly_to, $hourlyShowAll, $hourlyDateFilterDefault, $hourly_sort); ?>
+                                        <?php if (!$pIsWaived) { ?>
+                                            <input type="text" name="waive_note" placeholder="Relaxation reason (optional)" maxlength="255" style="width: 180px; padding: 5px 8px; font-size: 0.75rem; margin-bottom: 6px;">
+                                        <?php } ?>
+                                        <button type="submit" class="<?php echo $pIsWaived ? 'btn-danger' : 'btn-secondary'; ?>" style="padding: 6px 10px; font-size: 0.75rem; white-space: nowrap;">
+                                            <?php echo $pIsWaived ? 'Re-apply fine' : 'Waive off'; ?>
+                                        </button>
+                                    </form>
+
+                                    <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('<?php echo htmlspecialchars($pDeleteConfirm, ENT_QUOTES); ?>');">
+                                        <input type="hidden" name="penalty_row_action" value="delete">
+                                        <input type="hidden" name="penalty_id" value="<?php echo (int) $pRow['id']; ?>">
+                                        <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                                        <?php reportsPreserveQueryHiddenFields($employee_id, $dateFilterActive, $date_from, $date_to, $hourlyDateFilterActive, $hourly_from, $hourly_to, $hourlyShowAll, $hourlyDateFilterDefault, $hourly_sort); ?>
+                                        <button type="submit" class="btn-danger" style="padding: 6px 10px; font-size: 0.75rem; white-space: nowrap;">
+                                            Delete
+                                        </button>
+                                    </form>
+                                </div>
+                            <?php } ?>
                         </td>
                     </tr>
                 <?php }
                 } else { ?>
                     <tr>
-                        <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                        <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">
                             No penalty records<?php echo $dateFilterActive ? ' in the selected date range' : ''; ?>.
                         </td>
                     </tr>

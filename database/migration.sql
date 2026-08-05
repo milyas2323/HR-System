@@ -110,3 +110,10 @@ CREATE TABLE IF NOT EXISTS short_hours_relaxations (
     UNIQUE KEY uniq_employee_shift_short_hours (employee_id, shift_id),
     KEY idx_short_hours_relax_date (shift_date)
 );
+
+-- 13. Admin waivers on stored penalty rows (misconduct / unapproved-request fines)
+ALTER TABLE penalties ADD COLUMN waived TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE penalties ADD COLUMN waived_at DATETIME DEFAULT NULL AFTER waived;
+ALTER TABLE penalties ADD COLUMN waived_by VARCHAR(150) DEFAULT NULL AFTER waived_at;
+ALTER TABLE penalties ADD COLUMN waive_note VARCHAR(255) DEFAULT NULL AFTER waived_by;
+ALTER TABLE penalties ADD INDEX idx_penalty_waived (waived);

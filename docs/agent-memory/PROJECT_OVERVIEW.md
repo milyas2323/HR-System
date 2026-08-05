@@ -83,6 +83,7 @@ hr-system/
 - Absence (no shift start): PKR 5,000 per missed weekday shift.
 - Missed hourly/end reports: 3 free per month, then PKR 1,000 each (monthly recount deletes prior automated penalty rows for that month).
 - Short working hours: PKR 1,000 per **closed weekday** shift under 8 worked hours (`SHORT_HOURS_PENALTY_AMOUNT`). Waived by an approved *Early Sign-off* / *Extended Break* request on that date, or by an admin waiver row in `short_hours_relaxations` (Reports → daily breakdown → **Waive short hours**, reversible via **Undo hours waiver**); open shifts are never fined. Reason string `Monthly Short Hours%`, penalty key `short_hours`.
+- Admin-logged fines (misconduct, unapproved requests) are stored rows in `penalties` and can be **waived off** or **deleted** from Reports → penalty breakdown → Action column. A waived row keeps `waived=1` plus `waived_by` / `waived_at` / `waive_note` for audit and is excluded from every total (`waiveStoredPenalty` / `restoreStoredPenalty` / `deleteStoredPenalty`); automated monthly rows are rejected there because the engine rebuilds them.
 
 ### Geofencing
 

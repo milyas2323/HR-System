@@ -83,8 +83,13 @@ if($_SESSION['user']['role'] != 'admin'){
                         <?php echo htmlspecialchars($row['reason']); ?>
                     </td>
 
-                    <td style="color: var(--danger); font-weight: 700; font-family: var(--font-heading);">
-                        - PKR <?php echo number_format($row['amount']); ?>
+                    <td style="font-weight: 700; font-family: var(--font-heading); color: <?php echo !empty($row['waived']) ? 'var(--text-muted)' : 'var(--danger)'; ?>;">
+                        <?php if (!empty($row['waived'])) { ?>
+                            <span style="text-decoration: line-through;">- PKR <?php echo number_format($row['amount']); ?></span>
+                            <div style="margin-top: 6px;"><span class="badge success">Waived off</span></div>
+                        <?php } else { ?>
+                            - PKR <?php echo number_format($row['amount']); ?>
+                        <?php } ?>
                     </td>
 
                     <td style="color: var(--text-muted); font-size: 0.85rem;">

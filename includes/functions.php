@@ -1400,6 +1400,7 @@ function getManualPenaltySumInRange($conn, $employeeId, $dateFrom, $dateTo) {
         SELECT amount, reason
         FROM penalties
         WHERE employee_id='$employeeId'
+        AND waived = 0
         AND DATE(created_at) BETWEEN '$dateFrom' AND '$dateTo'
     ");
 
@@ -1506,6 +1507,7 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
         SELECT amount, reason, created_at
         FROM penalties
         WHERE employee_id='$employeeId'
+        AND waived = 0
         AND DATE(created_at) BETWEEN '" . mysqli_real_escape_string($conn, $dateFrom) . "'
         AND '" . mysqli_real_escape_string($conn, $dateTo) . "'
     ");
@@ -1639,7 +1641,7 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
     }
 
     $manualResult = $conn->query("
-        SELECT id, reason, amount, created_at
+        SELECT id, reason, amount, created_at, waived, waived_at, waived_by, waive_note
         FROM penalties
         WHERE employee_id='$employeeId'
         AND DATE(created_at) BETWEEN '" . mysqli_real_escape_string($conn, $dateFrom) . "'
@@ -1654,6 +1656,7 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
             $row['type'] = classifyPenaltyType($row['reason']);
             $row['penalty_month'] = date('Y-m', strtotime($row['created_at']));
             $row['dynamic'] = false;
+            $row['waived'] = !empty($row['waived']);
             $rows[] = $row;
         }
     }
@@ -1696,9 +1699,17 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
     ];
     $total = 0.0;
 
+    $waivedTotal = 0.0;
+    $waivedCount = 0;
+
     foreach ($rows as $row) {
         $key = $row['type']['key'];
         $amount = floatval($row['amount']);
+        if (!empty($row['waived'])) {
+            $waivedTotal += $amount;
+            $waivedCount++;
+            continue;
+        }
         $breakdown[$key]['count']++;
         $breakdown[$key]['total'] += $amount;
         $total += $amount;
@@ -1708,6 +1719,8 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
         'rows' => $rows,
         'breakdown' => $breakdown,
         'total' => $total,
+        'waived_total' => $waivedTotal,
+        'waived_count' => $waivedCount,
         'dynamic' => $dynamic,
     ];
 }
@@ -2029,6 +2042,7 @@ function recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, $mont
             SELECT SUM(amount) AS total
             FROM penalties
             WHERE employee_id='$employeeId'
+            AND waived = 0
             AND DATE_FORMAT(created_at, '%Y-%m')='" . date('Y-m') . "'
         ");
         $totalDeductions = 0;
@@ -2269,6 +2283,7 @@ function runMonthlyPenaltyAudit($conn, $month = null) {
             SELECT SUM(amount) as total
             FROM penalties
             WHERE employee_id='$user_id'
+            AND waived = 0
             AND DATE_FORMAT(created_at, '%Y-%m')='" . date('Y-m') . "'
         ");
 
@@ -2697,6 +2712,150 @@ function waiveRequestViolationPenalty($conn, $employeeId, $typeKey, $date) {
         'waived' => true,
         'amount' => $amount,
         'message' => 'PKR ' . number_format($amount) . ' penalty waived.',
+    ];
+}
+
+/* =========================================================
+   ADMIN ACTIONS ON STORED PENALTY ROWS (misconduct etc.)
+   ========================================================= */
+
+/**
+ * Load one stored penalty row with its employee name.
+ */
+function getStoredPenaltyRow($conn, $penaltyId) {
+    $penaltyId = (int) $penaltyId;
+    if ($penaltyId <= 0) {
+        return null;
+    }
+
+    $result = $conn->query("
+        SELECT p.*, u.name AS employee_name
+        FROM penalties p
+        LEFT JOIN users u ON u.id = p.employee_id
+        WHERE p.id='$penaltyId'
+        LIMIT 1
+    ");
+
+    return $result ? $result->fetch_assoc() : null;
+}
+
+/**
+ * Automated monthly rows are rebuilt by the penalty engine, so admin waive /
+ * delete only applies to admin-logged fines (misconduct, unapproved requests).
+ */
+function isAdminEditablePenaltyRow($row) {
+    return $row && !isAutomatedPenaltyReason($row['reason']);
+}
+
+/**
+ * Waive a stored fine without losing the record. The row stays visible in
+ * reports with a waived badge and stops counting toward any total.
+ */
+function waiveStoredPenalty($conn, $penaltyId, $waivedBy = 'Admin', $note = '') {
+    $row = getStoredPenaltyRow($conn, $penaltyId);
+
+    if (!$row) {
+        return ['success' => false, 'message' => 'Penalty record not found.'];
+    }
+    if (!isAdminEditablePenaltyRow($row)) {
+        return ['success' => false, 'message' => 'Automated penalties cannot be waived here — use the relaxation buttons in the daily breakdown.'];
+    }
+    if (!empty($row['waived'])) {
+        return ['success' => true, 'message' => 'This penalty is already waived.'];
+    }
+
+    $penaltyId = (int) $row['id'];
+    $employeeId = (int) $row['employee_id'];
+    $amount = floatval($row['amount']);
+    $waivedByEsc = mysqli_real_escape_string($conn, trim((string) $waivedBy) ?: 'Admin');
+    $noteEsc = mysqli_real_escape_string($conn, mb_substr(trim((string) $note), 0, 255));
+
+    $conn->query("
+        UPDATE penalties
+        SET waived = 1,
+            waived_at = NOW(),
+            waived_by = '$waivedByEsc',
+            waive_note = " . ($noteEsc === '' ? 'NULL' : "'$noteEsc'") . "
+        WHERE id='$penaltyId'
+    ");
+
+    $conn->query("UPDATE users
+                  SET total_deduction = GREATEST(total_deduction - $amount, 0)
+                  WHERE id='$employeeId'");
+
+    return [
+        'success' => true,
+        'message' => 'PKR ' . number_format($amount) . ' fine waived off for '
+            . ($row['employee_name'] ?? 'employee') . '. The record is kept for audit.',
+    ];
+}
+
+/**
+ * Undo a waiver — the fine counts again.
+ */
+function restoreStoredPenalty($conn, $penaltyId) {
+    $row = getStoredPenaltyRow($conn, $penaltyId);
+
+    if (!$row) {
+        return ['success' => false, 'message' => 'Penalty record not found.'];
+    }
+    if (empty($row['waived'])) {
+        return ['success' => true, 'message' => 'This penalty is already active.'];
+    }
+
+    $penaltyId = (int) $row['id'];
+    $employeeId = (int) $row['employee_id'];
+    $amount = floatval($row['amount']);
+
+    $conn->query("
+        UPDATE penalties
+        SET waived = 0,
+            waived_at = NULL,
+            waived_by = NULL,
+            waive_note = NULL
+        WHERE id='$penaltyId'
+    ");
+
+    $conn->query("UPDATE users
+                  SET total_deduction = total_deduction + $amount
+                  WHERE id='$employeeId'");
+
+    return [
+        'success' => true,
+        'message' => 'PKR ' . number_format($amount) . ' fine re-applied.',
+    ];
+}
+
+/**
+ * Remove a stored fine permanently (no audit trail left).
+ */
+function deleteStoredPenalty($conn, $penaltyId) {
+    $row = getStoredPenaltyRow($conn, $penaltyId);
+
+    if (!$row) {
+        return ['success' => false, 'message' => 'Penalty record not found.'];
+    }
+    if (!isAdminEditablePenaltyRow($row)) {
+        return ['success' => false, 'message' => 'Automated penalties cannot be deleted here — they are rebuilt by the penalty engine.'];
+    }
+
+    $penaltyId = (int) $row['id'];
+    $employeeId = (int) $row['employee_id'];
+    $amount = floatval($row['amount']);
+    $wasWaived = !empty($row['waived']);
+
+    $conn->query("DELETE FROM penalties WHERE id='$penaltyId'");
+
+    if (!$wasWaived) {
+        $conn->query("UPDATE users
+                      SET total_deduction = GREATEST(total_deduction - $amount, 0)
+                      WHERE id='$employeeId'");
+    }
+
+    return [
+        'success' => true,
+        'message' => 'PKR ' . number_format($amount) . ' fine deleted for '
+            . ($row['employee_name'] ?? 'employee') . '.',
     ];
 }
 

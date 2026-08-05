@@ -174,4 +174,14 @@ if ($checkShortHoursRelax && $checkShortHoursRelax->num_rows == 0) {
         KEY idx_short_hours_relax_date (shift_date)
     )");
 }
+
+// 14. Admin waivers on stored penalty rows (misconduct / unapproved-request fines)
+$checkPenaltyWaive = $conn->query("SHOW COLUMNS FROM penalties LIKE 'waived'");
+if ($checkPenaltyWaive && $checkPenaltyWaive->num_rows == 0) {
+    $conn->query("ALTER TABLE penalties ADD COLUMN waived TINYINT(1) NOT NULL DEFAULT 0");
+    $conn->query("ALTER TABLE penalties ADD COLUMN waived_at DATETIME DEFAULT NULL AFTER waived");
+    $conn->query("ALTER TABLE penalties ADD COLUMN waived_by VARCHAR(150) DEFAULT NULL AFTER waived_at");
+    $conn->query("ALTER TABLE penalties ADD COLUMN waive_note VARCHAR(255) DEFAULT NULL AFTER waived_by");
+    $conn->query("ALTER TABLE penalties ADD INDEX idx_penalty_waived (waived)");
+}
 ?>

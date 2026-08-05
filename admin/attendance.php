@@ -1,12 +1,14 @@
 <?php
 include_once "../includes/db.php";
 include_once "../includes/auth.php";
+include_once "../includes/functions.php";
 
 if($_SESSION['user']['role'] != 'admin'){
     exit("Access Denied");
 }
 
 $today = date('Y-m-d');
+$dbNowTs = getDatabaseNowTimestamp($conn);
 $show_all = isset($_GET['show_all']) && $_GET['show_all'] === '1';
 $date_from_input = trim($_GET['date_from'] ?? '');
 $date_to_input = trim($_GET['date_to'] ?? '');
@@ -155,6 +157,12 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
 <div class="card">
     <h2>Attendance Shifts<?php echo $dateFilterActive ? ' — filtered' : ($show_all ? ' — all records' : ''); ?></h2>
 
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
+        Working hours policy: <strong><?php echo formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS); ?> of dedicated work per shift</strong>.
+        The <?php echo formatWorkDuration(SHIFT_BREAK_ALLOWANCE_SECONDS); ?> break is deducted from clock-in → clock-out whether it is taken or not,
+        so a complete workday spans <strong><?php echo formatWorkDuration(SHIFT_REQUIRED_SPAN_SECONDS); ?></strong>.
+    </p>
+
     <div class="table-box">
         <table>
             <tr>
@@ -162,6 +170,7 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
                 <th>Workday Screenshot</th>
                 <th>Morning Message</th>
                 <th>Clock In / Out</th>
+                <th>Worked Hours</th>
                 <th>Details (IP / Agent)</th>
                 <th>Status</th>
                 <th>Check-In Location</th>
@@ -206,6 +215,35 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
                         <?php } ?>
                     </td>
 
+                    <td style="font-size: 0.8rem; line-height: 1.6; white-space: nowrap;">
+                        <?php
+                        $work = getShiftWorkSummary($row, $dbNowTs);
+                        $workFineable = isShiftShortHoursFineable($conn, (int) $row['employee_id'], $row, $dbNowTs, $work);
+                        ?>
+                        <strong style="color: <?php echo $work['is_complete'] ? 'var(--success)' : ($work['is_closed'] ? 'var(--danger)' : 'var(--text-main)'); ?>; font-size: 0.95rem;">
+                            <?php echo htmlspecialchars($work['worked_label']); ?>
+                        </strong>
+                        <span style="color: var(--text-muted);">/ <?php echo htmlspecialchars($work['required_label']); ?></span>
+                        <div style="color: var(--text-muted); font-size: 0.7rem;">
+                            Span <?php echo htmlspecialchars($work['span_label']); ?> − break <?php echo htmlspecialchars($work['break_label']); ?>
+                        </div>
+                        <?php if ($work['is_stale']) { ?>
+                            <span class="badge danger" style="font-size: 0.65rem;">Never closed · hours unverified</span>
+                        <?php } elseif (!$work['is_closed']) { ?>
+                            <span class="badge warning" style="font-size: 0.65rem;">Running</span>
+                        <?php } elseif ($work['is_complete']) { ?>
+                            <span class="badge success" style="font-size: 0.65rem;">Complete</span>
+                        <?php } elseif ($workFineable) { ?>
+                            <span class="badge danger" style="font-size: 0.65rem;">
+                                <?php echo htmlspecialchars($work['short_label']); ?> short · PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?>
+                            </span>
+                        <?php } else { ?>
+                            <span class="badge warning" style="font-size: 0.65rem;">
+                                <?php echo htmlspecialchars($work['short_label']); ?> short · not fined
+                            </span>
+                        <?php } ?>
+                    </td>
+
                     <td style="font-size: 0.8rem; color: var(--text-muted);">
                         <div>IP: <strong style="color: var(--text-main);"><?php echo htmlspecialchars($row['ip_address'] ? $row['ip_address'] : 'Dev Loop'); ?></strong></div>
                         <div style="margin-top: 2px;">UA: <?php echo htmlspecialchars($row['device']); ?></div>
@@ -231,7 +269,7 @@ $closedShifts = $conn->query("SELECT COUNT(*) as total FROM shifts WHERE status=
             <?php }
             } else { ?>
                 <tr>
-                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                    <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
                         No workday shifts<?php echo $dateFilterActive ? ' in the selected date range' : ''; ?>.
                     </td>
                 </tr>

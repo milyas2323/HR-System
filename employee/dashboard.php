@@ -201,6 +201,10 @@ foreach ($missedReport['monthly'] as $monthRow) {
 }
 $expectedMissedFine = calculateMissedUpdatesFineAmount($missedCounts['billable']);
 
+$activeWork = $active ? getShiftWorkSummary($active, $dbNowTs) : null;
+$monthShortShifts = $missedReport['short_hours_shifts'];
+$monthShortFine = $missedReport['short_hours_fine'];
+
 list($currentMonthPayFrom, $currentMonthPayTo) = getPayrollMonthDateRange($currentMonthKey);
 $currentMonthPenaltyData = calculateEmployeeDynamicPenalties($conn, $employeeId, $currentMonthPayFrom, $currentMonthPayTo, $dbNowTs);
 $currentMonthFines = $currentMonthPenaltyData['total'];
@@ -434,6 +438,30 @@ if ($hourlyShowAll) {
                         <p style="margin-bottom: 5px;">Device detected: <strong style="color: var(--text-main);"><?php echo htmlspecialchars($active['device']); ?></strong></p>
                         <p>Workplace IP: <strong style="color: var(--text-main);"><?php echo htmlspecialchars($active['ip_address']); ?></strong></p>
                     </div>
+
+                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.18);">
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Worked so far (break excluded)</p>
+                        <p style="font-size: 1.5rem; font-family: var(--font-heading); font-weight: 800; margin: 0; color: <?php echo $activeWork['is_complete'] ? 'var(--success)' : 'var(--text-main)'; ?>;">
+                            <?php echo htmlspecialchars($activeWork['worked_label']); ?>
+                            <span style="font-size: 0.9rem; font-weight: 500; color: var(--text-muted);">/ <?php echo htmlspecialchars($activeWork['required_label']); ?></span>
+                        </p>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 8px 0 0;">
+                            On shift <?php echo htmlspecialchars($activeWork['span_label']); ?> · break deducted <?php echo htmlspecialchars($activeWork['break_label']); ?> of <?php echo htmlspecialchars(formatWorkDuration(SHIFT_BREAK_ALLOWANCE_SECONDS)); ?>
+                        </p>
+                        <?php if ($activeWork['is_stale']) { ?>
+                            <p style="font-size: 0.85rem; color: var(--danger); margin: 10px 0 0;">
+                                This shift has been open for more than <?php echo formatWorkDuration(SHIFT_STALE_OPEN_SECONDS); ?>. Close it — worked hours cannot be verified beyond <?php echo formatWorkDuration(SHIFT_REQUIRED_SPAN_SECONDS); ?>.
+                            </p>
+                        <?php } elseif ($activeWork['is_complete']) { ?>
+                            <p style="font-size: 0.85rem; color: var(--success); margin: 10px 0 0;">
+                                ✓ Required hours complete. You can close your shift.
+                            </p>
+                        <?php } else { ?>
+                            <p style="font-size: 0.85rem; color: var(--warning); margin: 10px 0 0;">
+                                <?php echo htmlspecialchars($activeWork['short_label']); ?> left — closing now is a short shift (PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?> fine).
+                            </p>
+                        <?php } ?>
+                    </div>
                 <?php } else { ?>
                     <p class="inactive" style="display: flex; align-items: center; gap: 8px;">
                         <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 10px var(--danger);"></span>
@@ -478,6 +506,27 @@ if ($hourlyShowAll) {
                 </div>
                 <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 14px;">
                     Bonuses added by admin. Each one is credited as an earning on the salary slip of the month it was assigned to.
+                </p>
+            </div>
+
+            <!-- WORKING HOURS SUMMARY -->
+            <div class="card stat-box" style="border-bottom: 4px solid <?php echo $monthShortShifts > 0 ? 'var(--danger)' : 'var(--success)'; ?>;">
+                <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 8px;">Working Hours (<?php echo date('M Y'); ?>)</h2>
+                <p style="font-size: 1.35rem; font-family: var(--font-heading); font-weight: 700; color: var(--text-main); margin: 0;">
+                    <?php echo htmlspecialchars($missedReport['total_worked_label']); ?>
+                </p>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 10px;">
+                    Total worked this month · <?php echo formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS); ?> required per shift
+                </p>
+                <p style="color: <?php echo $monthShortShifts > 0 ? 'var(--danger)' : 'var(--success)'; ?>; font-size: 0.8rem; margin-top: 8px;">
+                    <?php if ($monthShortShifts > 0) { ?>
+                        <?php echo (int) $monthShortShifts; ?> short shift(s) · fine PKR <?php echo number_format($monthShortFine); ?>
+                    <?php } else { ?>
+                        ✓ No short shifts this month
+                    <?php } ?>
+                </p>
+                <p style="color: var(--text-muted); font-size: 0.75rem; margin-top: 8px;">
+                    The <?php echo formatWorkDuration(SHIFT_BREAK_ALLOWANCE_SECONDS); ?> break is deducted whether taken or not, so a full day is <?php echo formatWorkDuration(SHIFT_REQUIRED_SPAN_SECONDS); ?> clock-in to clock-out.
                 </p>
             </div>
 
@@ -576,7 +625,8 @@ if ($hourlyShowAll) {
         <div class="card">
             <h2>Missed Updates — Daily Breakdown</h2>
             <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">
-                Per shift: missed hourly windows (:00–:15) and end-of-day report. Open shift slots are not counted until the window closes.
+                Per shift: worked hours, missed hourly windows (:00–:15) and end-of-day report. Open shift slots are not counted until the window closes.
+                Worked hours = clock-in → clock-out minus the <?php echo formatWorkDuration(SHIFT_BREAK_ALLOWANCE_SECONDS); ?> break, which is deducted whether you take it or not.
             </p>
 
             <?php if ($active && $missedCounts['pending'] > 0) { ?>
@@ -592,6 +642,7 @@ if ($hourlyShowAll) {
                         <th>Workday</th>
                         <th>Clock In</th>
                         <th>Shift</th>
+                        <th>Worked Hours</th>
                         <th>Hourly (filled / req.)</th>
                         <th>Missed Slots</th>
                         <th>End Report</th>
@@ -607,6 +658,31 @@ if ($hourlyShowAll) {
                                 <span class="badge <?php echo $dayRow['status'] === 'active' ? 'success' : 'warning'; ?>">
                                     <?php echo strtoupper($dayRow['status']); ?>
                                 </span>
+                            </td>
+                            <td style="font-size: 0.8rem; line-height: 1.6; white-space: nowrap;">
+                                <?php $work = $dayRow['work']; ?>
+                                <strong style="color: <?php echo $work['is_complete'] ? 'var(--success)' : ($work['is_closed'] ? 'var(--danger)' : 'var(--text-main)'); ?>;">
+                                    <?php echo htmlspecialchars($work['worked_label']); ?>
+                                </strong>
+                                <span style="color: var(--text-muted);">/ <?php echo htmlspecialchars($work['required_label']); ?></span>
+                                <div style="color: var(--text-muted); font-size: 0.7rem;">
+                                    Span <?php echo htmlspecialchars($work['span_label']); ?> − break <?php echo htmlspecialchars($work['break_label']); ?>
+                                </div>
+                                <?php if ($work['is_stale']) { ?>
+                                    <span class="badge danger" style="font-size: 0.65rem;">Never closed · hours unverified</span>
+                                <?php } elseif (!$work['is_closed']) { ?>
+                                    <span class="badge warning" style="font-size: 0.65rem;">Running</span>
+                                <?php } elseif ($work['is_complete']) { ?>
+                                    <span class="badge success" style="font-size: 0.65rem;">Complete</span>
+                                <?php } elseif ($dayRow['short_hours_fineable']) { ?>
+                                    <span class="badge danger" style="font-size: 0.65rem;">
+                                        <?php echo htmlspecialchars($work['short_label']); ?> short · PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?>
+                                    </span>
+                                <?php } else { ?>
+                                    <span class="badge warning" style="font-size: 0.65rem;">
+                                        <?php echo htmlspecialchars($work['short_label']); ?> short · not fined
+                                    </span>
+                                <?php } ?>
                             </td>
                             <td>
                                 <?php echo (int) $dayRow['hourly_filled']; ?> / <?php echo (int) $dayRow['hourly_required']; ?>
@@ -643,7 +719,7 @@ if ($hourlyShowAll) {
                     <?php }
                     } else { ?>
                         <tr>
-                            <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                            <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 24px;">
                                 No shifts recorded for <?php echo date('F Y'); ?> yet.
                             </td>
                         </tr>

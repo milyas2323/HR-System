@@ -295,6 +295,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                 <th>Employee</th>
                 <th>Total Shifts</th>
                 <th>Missed Updates</th>
+                <th>Short Hours</th>
                 <th>Penalty (<?php echo htmlspecialchars($reportPeriodLabel); ?>)</th>
                 <th>Net Salary (<?php echo htmlspecialchars($reportPeriodLabel); ?>)</th>
                 <th>Action</th>
@@ -329,6 +330,16 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                             </div>
                         <?php } ?>
                     </td>
+                    <td>
+                        <span class="badge <?php echo $penaltyData['short_hours_count'] > 0 ? 'danger' : 'success'; ?>">
+                            <?php echo (int) $penaltyData['short_hours_count']; ?> short
+                        </span>
+                        <?php if ($penaltyData['short_hours_count'] > 0) { ?>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                                <?php echo htmlspecialchars(formatWorkDuration($penaltyData['short_hours_seconds'])); ?> under 8h
+                            </div>
+                        <?php } ?>
+                    </td>
                     <td style="color: var(--danger); font-weight: 600;">PKR <?php echo number_format($monthPenalty); ?></td>
                     <td>
                         <div style="font-weight: 700; color: var(--success);">PKR <?php echo number_format($netSalary); ?></div>
@@ -343,7 +354,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             <?php }
             } else { ?>
                 <tr>
-                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">No employees found.</td>
+                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">No employees found.</td>
                 </tr>
             <?php } ?>
         </table>
@@ -384,6 +395,10 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         $finedMissedCount = $detailPenaltyData['missed_updates_fined_count'];
         $expectedMissedFine = $detailPenaltyData['missed_updates_fine'];
 
+        $shortHoursShifts = $detailPenaltyData['short_hours_count'];
+        $shortHoursFine = $detailPenaltyData['short_hours_fine'];
+        $shortHoursLabel = formatWorkDuration($detailPenaltyData['short_hours_seconds']);
+
         $currentMonthShifts = reportsFetchEmployeeShifts($conn, $employee_id, true, date('Y-m-01'), date('Y-m-t'));
         $currentMonthMissedCounts = countBillableMissedUpdatesForShifts($conn, $employee_id, $currentMonthShifts, $dbNowTs);
         $pendingMonthMissed = $currentMonthMissedCounts['pending'];
@@ -399,7 +414,10 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         // Monthly penalties for monthly missed summary (live calculation per month)
         $penaltiesByMonth = [];
         foreach ($detailPenaltyData['by_month'] as $monthKey => $monthData) {
-            $penaltiesByMonth[$monthKey] = $monthData['absence_fine'] + $monthData['missed_updates_fine'] + $monthData['manual_fine'];
+            $penaltiesByMonth[$monthKey] = $monthData['absence_fine']
+                + $monthData['missed_updates_fine']
+                + ($monthData['short_hours_fine'] ?? 0)
+                + $monthData['manual_fine'];
         }
 
         $hourlyHistoryRows = [];
@@ -474,6 +492,17 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             </p>
         </div>
 
+        <div class="card stat-box" style="border-bottom: 4px solid <?php echo $shortHoursShifts > 0 ? 'var(--danger)' : 'var(--success)'; ?>;">
+            <h4>Short Hours<?php echo $dateFilterActive ? ' (in range)' : ''; ?></h4>
+            <h2 style="color: <?php echo $shortHoursShifts > 0 ? 'var(--danger)' : 'var(--success)'; ?>;"><?php echo (int) $shortHoursShifts; ?></h2>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">
+                Shift(s) under <?php echo formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS); ?> worked
+                <?php if ($shortHoursShifts > 0) { ?>
+                    · <?php echo htmlspecialchars($shortHoursLabel); ?> short · fine PKR <?php echo number_format($shortHoursFine); ?>
+                <?php } ?>
+            </p>
+        </div>
+
         <div class="card stat-box" style="border-bottom: 4px solid var(--danger);">
             <h4>Penalty (<?php echo htmlspecialchars($detailPeriodLabel); ?>)</h4>
             <h2 style="color: var(--danger);">PKR <?php echo number_format($totalPenaltyPeriod); ?></h2>
@@ -501,6 +530,11 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             Penalties below are computed <strong>live</strong> from shifts, missed slots, end reports, approved leaves, and relaxations.
             Absences are charged PKR 5,000 per weekday <em>after the employee’s first clock-in</em> (not before join).
             Missed-update fines: 3 free/month, then PKR 1,000 each.
+            Short hours: every shift must deliver <strong><?php echo formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS); ?> of work</strong>;
+            the <?php echo formatWorkDuration(SHIFT_BREAK_ALLOWANCE_SECONDS); ?> break is deducted from clock-in → clock-out whether it is taken or not,
+            so a full workday spans <strong><?php echo formatWorkDuration(SHIFT_REQUIRED_SPAN_SECONDS); ?></strong>.
+            Closed weekday shifts below that are fined PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?> each,
+            unless an <em>Early Sign-off</em> or <em>Extended Break</em> request was approved for that day.
         </p>
 
         <?php if ($pendingMonthMissed > 0) { ?>
@@ -591,6 +625,8 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                 <tr>
                     <th>Month</th>
                     <th>Shifts</th>
+                    <th>Worked Hours</th>
+                    <th>Short Shifts</th>
                     <th>Missed Hourly Slots</th>
                     <th>Missed End Reports</th>
                     <th>Total Missed</th>
@@ -603,6 +639,15 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     <tr>
                         <td><strong><?php echo date('F Y', strtotime($monthRow['month'] . '-01')); ?></strong></td>
                         <td><?php echo $monthRow['shifts']; ?></td>
+                        <td style="font-size: 0.85rem;"><?php echo htmlspecialchars(formatWorkDuration($monthRow['worked_seconds'])); ?></td>
+                        <td>
+                            <span class="badge <?php echo $monthRow['short_hours_shifts'] > 0 ? 'danger' : 'success'; ?>"><?php echo $monthRow['short_hours_shifts']; ?></span>
+                            <?php if ($monthRow['short_hours_shifts'] > 0) { ?>
+                                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">
+                                    <?php echo htmlspecialchars(formatWorkDuration($monthRow['short_hours_seconds'])); ?> short
+                                </div>
+                            <?php } ?>
+                        </td>
                         <td><span class="badge <?php echo $monthRow['hourly_missed'] > 0 ? 'danger' : 'success'; ?>"><?php echo $monthRow['hourly_missed']; ?></span></td>
                         <td><span class="badge <?php echo $monthRow['summary_missed'] > 0 ? 'danger' : 'success'; ?>"><?php echo $monthRow['summary_missed']; ?></span></td>
                         <td><strong style="color: var(--danger);"><?php echo $monthRow['total_missed']; ?></strong></td>
@@ -611,7 +656,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                 <?php }
                 } else { ?>
                     <tr>
-                        <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 20px;">No shift data<?php echo $dateFilterActive ? ' in selected range' : ''; ?>.</td>
+                        <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">No shift data<?php echo $dateFilterActive ? ' in selected range' : ''; ?>.</td>
                     </tr>
                 <?php } ?>
             </table>
@@ -634,6 +679,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     <th>Workday</th>
                     <th>Clock In</th>
                     <th>Shift</th>
+                    <th>Worked Hours</th>
                     <th>Hourly (filled / 7)</th>
                     <th>Missed Slots</th>
                     <th>End Report</th>
@@ -650,6 +696,31 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                             <span class="badge <?php echo $dayRow['status'] === 'active' ? 'success' : 'warning'; ?>">
                                 <?php echo strtoupper($dayRow['status']); ?>
                             </span>
+                        </td>
+                        <td style="font-size: 0.8rem; line-height: 1.6; white-space: nowrap;">
+                            <?php $work = $dayRow['work']; ?>
+                            <strong style="color: <?php echo $work['is_complete'] ? 'var(--success)' : ($work['is_closed'] ? 'var(--danger)' : 'var(--text-main)'); ?>;">
+                                <?php echo htmlspecialchars($work['worked_label']); ?>
+                            </strong>
+                            <span style="color: var(--text-muted);">/ <?php echo htmlspecialchars($work['required_label']); ?></span>
+                            <div style="color: var(--text-muted); font-size: 0.7rem;">
+                                Span <?php echo htmlspecialchars($work['span_label']); ?> − break <?php echo htmlspecialchars($work['break_label']); ?>
+                            </div>
+                            <?php if ($work['is_stale']) { ?>
+                                <span class="badge danger" style="font-size: 0.65rem;">Never closed · hours unverified</span>
+                            <?php } elseif (!$work['is_closed']) { ?>
+                                <span class="badge warning" style="font-size: 0.65rem;">Running</span>
+                            <?php } elseif ($work['is_complete']) { ?>
+                                <span class="badge success" style="font-size: 0.65rem;">Complete</span>
+                            <?php } elseif ($dayRow['short_hours_fineable']) { ?>
+                                <span class="badge danger" style="font-size: 0.65rem;">
+                                    <?php echo htmlspecialchars($work['short_label']); ?> short · PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?>
+                                </span>
+                            <?php } else { ?>
+                                <span class="badge warning" style="font-size: 0.65rem;">
+                                    <?php echo htmlspecialchars($work['short_label']); ?> short · not fined
+                                </span>
+                            <?php } ?>
                         </td>
                         <td>
                             <?php echo $dayRow['hourly_filled']; ?> / <?php echo $dayRow['hourly_required']; ?>
@@ -709,7 +780,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                 <?php }
                 } else { ?>
                     <tr>
-                        <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">
+                        <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">
                             No shifts<?php echo $dateFilterActive ? ' in the selected date range' : ''; ?>.
                         </td>
                     </tr>

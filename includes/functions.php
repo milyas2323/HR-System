@@ -847,6 +847,211 @@ function getDatabaseNowTimestamp($conn) {
     return time();
 }
 
+/* =========================================================
+   WORKING HOURS — 8h dedicated work + 1h unpaid break
+   ========================================================= */
+
+/** Net working hours every shift must deliver (break excluded). */
+define('SHIFT_REQUIRED_WORK_SECONDS', 8 * 3600);
+
+/** Break allowance deducted from every shift, whether taken or not. */
+define('SHIFT_BREAK_ALLOWANCE_SECONDS', 3600);
+
+/** Clock-in to clock-out time needed to deliver the required working hours. */
+define('SHIFT_REQUIRED_SPAN_SECONDS', SHIFT_REQUIRED_WORK_SECONDS + SHIFT_BREAK_ALLOWANCE_SECONDS);
+
+/** Fine per closed weekday shift that delivered less than the required hours. */
+define('SHORT_HOURS_PENALTY_AMOUNT', 1000);
+
+/** An open shift running past this is abandoned, not overtime — hours unverifiable. */
+define('SHIFT_STALE_OPEN_SECONDS', SHIFT_REQUIRED_SPAN_SECONDS + (3 * 3600));
+
+/** Approved request types that excuse a shift from the short-hours fine. */
+function getShortHoursWaiverRequestTypes() {
+    return ['early_leave', 'extended_break'];
+}
+
+/**
+ * Human duration label, e.g. 8h 05m.
+ */
+function formatWorkDuration($seconds) {
+    $seconds = max(0, (int) $seconds);
+    return intdiv($seconds, 3600) . 'h ' . str_pad(intdiv($seconds % 3600, 60), 2, '0', STR_PAD_LEFT) . 'm';
+}
+
+/**
+ * Working hours for one shift: clock-in to clock-out minus the 1h break
+ * allowance. Open shifts are measured against the audit timestamp.
+ */
+function getShiftWorkSummary($shiftRow, $auditTimestamp = null) {
+    $auditTimestamp = $auditTimestamp ?? time();
+
+    $startTs = strtotime((string) ($shiftRow['start_time'] ?? ''));
+    $endValue = trim((string) ($shiftRow['end_time'] ?? ''));
+    $endTs = ($endValue !== '' && strpos($endValue, '0000-00-00') !== 0) ? strtotime($endValue) : false;
+    $status = strtolower(trim((string) ($shiftRow['status'] ?? '')));
+    $isClosed = ($status === 'closed' && $endTs !== false);
+
+    $summary = [
+        'is_closed' => $isClosed,
+        'is_stale' => false,
+        'start_ts' => $startTs ?: null,
+        'end_ts' => $isClosed ? $endTs : null,
+        'span_seconds' => 0,
+        'break_seconds' => 0,
+        'worked_seconds' => 0,
+        'short_seconds' => SHIFT_REQUIRED_WORK_SECONDS,
+        'required_seconds' => SHIFT_REQUIRED_WORK_SECONDS,
+        'required_span_seconds' => SHIFT_REQUIRED_SPAN_SECONDS,
+        'break_allowance_seconds' => SHIFT_BREAK_ALLOWANCE_SECONDS,
+        'is_complete' => false,
+        'is_short' => false,
+        'span_label' => formatWorkDuration(0),
+        'break_label' => formatWorkDuration(0),
+        'worked_label' => formatWorkDuration(0),
+        'short_label' => formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS),
+        'required_label' => formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS),
+        'required_span_label' => formatWorkDuration(SHIFT_REQUIRED_SPAN_SECONDS),
+    ];
+
+    if (!$startTs) {
+        return $summary;
+    }
+
+    $referenceTs = $isClosed ? $endTs : $auditTimestamp;
+    $isStale = (!$isClosed && ($referenceTs - $startTs) >= SHIFT_STALE_OPEN_SECONDS);
+    if ($isStale) {
+        $referenceTs = $startTs + SHIFT_REQUIRED_SPAN_SECONDS;
+    }
+
+    $span = max(0, $referenceTs - $startTs);
+    $break = min($span, SHIFT_BREAK_ALLOWANCE_SECONDS);
+    $worked = max(0, $span - $break);
+    $short = max(0, SHIFT_REQUIRED_WORK_SECONDS - $worked);
+
+    $summary['is_stale'] = $isStale;
+    $summary['span_seconds'] = $span;
+    $summary['break_seconds'] = $break;
+    $summary['worked_seconds'] = $worked;
+    $summary['short_seconds'] = $short;
+    $summary['is_complete'] = ($short === 0 && !$isStale);
+    $summary['is_short'] = ($isClosed && $short > 0);
+    $summary['span_label'] = formatWorkDuration($span);
+    $summary['break_label'] = formatWorkDuration($break);
+    $summary['worked_label'] = formatWorkDuration($worked);
+    $summary['short_label'] = formatWorkDuration($short);
+
+    return $summary;
+}
+
+/**
+ * Approved Early Sign-off / Extended Break request for that workday.
+ */
+function hasApprovedShortHoursWaiver($conn, $employeeId, $shiftDate) {
+    $employeeId = (int) $employeeId;
+    if (strtotime((string) $shiftDate) === false) {
+        return false;
+    }
+
+    $dateEsc = mysqli_real_escape_string($conn, date('Y-m-d', strtotime($shiftDate)));
+    $types = "'" . implode("','", getShortHoursWaiverRequestTypes()) . "'";
+
+    $result = $conn->query("
+        SELECT id FROM employee_requests
+        WHERE employee_id='$employeeId'
+        AND request_date='$dateEsc'
+        AND status='approved'
+        AND request_type IN ($types)
+        LIMIT 1
+    ");
+
+    return ($result && $result->num_rows > 0);
+}
+
+/**
+ * Whether a shift carries the short-hours fine: closed, weekday, under the
+ * required working hours, and no approved request covering that day.
+ */
+function isShiftShortHoursFineable($conn, $employeeId, $shiftRow, $auditTimestamp = null, $workSummary = null) {
+    $summary = $workSummary ?? getShiftWorkSummary($shiftRow, $auditTimestamp);
+    if (!$summary['is_short']) {
+        return false;
+    }
+
+    $startTs = strtotime((string) ($shiftRow['start_time'] ?? ''));
+    if (!$startTs) {
+        return false;
+    }
+    if ((int) date('N', $startTs) >= 6) {
+        return false;
+    }
+
+    return !hasApprovedShortHoursWaiver($conn, $employeeId, date('Y-m-d', $startTs));
+}
+
+/**
+ * Short-hours totals across a list of shifts.
+ */
+function summariseShortHoursForShifts($conn, $employeeId, $shiftsList, $auditTimestamp = null) {
+    $auditTimestamp = $auditTimestamp ?? time();
+    $count = 0;
+    $shortSeconds = 0;
+    $waived = 0;
+    $pending = 0;
+    $dates = [];
+
+    foreach ($shiftsList as $shift) {
+        $summary = getShiftWorkSummary($shift, $auditTimestamp);
+
+        if (!$summary['is_closed']) {
+            if (!$summary['is_complete'] && !$summary['is_stale']) {
+                $pending++;
+            }
+            continue;
+        }
+
+        if (!$summary['is_short']) {
+            continue;
+        }
+
+        if (!isShiftShortHoursFineable($conn, $employeeId, $shift, $auditTimestamp, $summary)) {
+            $waived++;
+            continue;
+        }
+
+        $count++;
+        $shortSeconds += $summary['short_seconds'];
+        $dates[] = date('Y-m-d', strtotime($shift['start_time']));
+    }
+
+    return [
+        'count' => $count,
+        'short_seconds' => $shortSeconds,
+        'waived' => $waived,
+        'pending' => $pending,
+        'dates' => $dates,
+        'fine' => calculateShortHoursFineAmount($count),
+    ];
+}
+
+/**
+ * PKR fine for shifts that finished under the required working hours.
+ */
+function calculateShortHoursFineAmount($shortShiftCount) {
+    return max(0, (int) $shortShiftCount) * SHORT_HOURS_PENALTY_AMOUNT;
+}
+
+/**
+ * Canonical penalty reason for the monthly short-hours fine.
+ */
+function buildShortHoursPenaltyReason($shortShiftCount, $shortSeconds = 0) {
+    $shortShiftCount = max(0, (int) $shortShiftCount);
+    $label = $shortShiftCount === 1 ? 'shift' : 'shifts';
+
+    return "Monthly Short Hours ($shortShiftCount $label under 8h, "
+        . formatWorkDuration($shortSeconds) . ' short)';
+}
+
 /**
  * Whether a shift is ready for missed-update fine calculation.
  * Includes closed shifts, 9h+ elapsed, or all hourly slot windows have ended.
@@ -1056,7 +1261,7 @@ function isAutomatedPenaltyReason($reason) {
     // Only the monthly engine-generated rows are recreated on recalc. Everything
     // else (admin misconduct, request violations) is a stored row that must be
     // summed and displayed as-is.
-    return in_array($type['key'], ['absence', 'missed_updates'], true);
+    return in_array($type['key'], ['absence', 'missed_updates', 'short_hours'], true);
 }
 
 /**
@@ -1098,6 +1303,9 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
     $missedUpdatesTotal = 0;
     $missedUpdatesFinedCount = 0;
     $missedUpdatesFine = 0.0;
+    $shortHoursCount = 0;
+    $shortHoursSeconds = 0;
+    $shortHoursFine = 0.0;
     $byMonth = [];
 
     $month = date('Y-m', strtotime($dateFrom));
@@ -1128,6 +1336,7 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
         }
 
         $monthMissed = 0;
+        $monthShifts = [];
         foreach (getAuditableShiftsForPenaltyMonth($conn, $employeeId, $month, $auditTimestamp) as $shift) {
             $shiftDate = date('Y-m-d', strtotime($shift['start_time']));
             if ($shiftDate < $dateFrom || $shiftDate > $dateTo) {
@@ -1135,7 +1344,10 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
             }
             $breakdown = getMissedUpdatesBreakdownForShift($conn, $employeeId, $shift, $auditTimestamp);
             $monthMissed += $breakdown['total'];
+            $monthShifts[] = $shift;
         }
+
+        $monthShortHours = summariseShortHoursForShifts($conn, $employeeId, $monthShifts, $auditTimestamp);
 
         $monthAbsenceFine = $monthAbsences * 5000;
         $monthMissedFine = calculateMissedUpdatesFineAmount($monthMissed);
@@ -1146,6 +1358,9 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
         $missedUpdatesTotal += $monthMissed;
         $missedUpdatesFinedCount += $monthFinedMissedCount;
         $missedUpdatesFine += $monthMissedFine;
+        $shortHoursCount += $monthShortHours['count'];
+        $shortHoursSeconds += $monthShortHours['short_seconds'];
+        $shortHoursFine += $monthShortHours['fine'];
 
         $byMonth[$month] = [
             'absences' => $monthAbsences,
@@ -1153,6 +1368,10 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
             'missed_updates' => $monthMissed,
             'missed_updates_fined_count' => $monthFinedMissedCount,
             'missed_updates_fine' => $monthMissedFine,
+            'short_hours' => $monthShortHours['count'],
+            'short_hours_seconds' => $monthShortHours['short_seconds'],
+            'short_hours_waived' => $monthShortHours['waived'],
+            'short_hours_fine' => $monthShortHours['fine'],
             'manual_fine' => 0.0,
         ];
 
@@ -1182,6 +1401,10 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
                     'missed_updates' => 0,
                     'missed_updates_fined_count' => 0,
                     'missed_updates_fine' => 0.0,
+                    'short_hours' => 0,
+                    'short_hours_seconds' => 0,
+                    'short_hours_waived' => 0,
+                    'short_hours_fine' => 0.0,
                     'manual_fine' => 0.0,
                 ];
             }
@@ -1189,13 +1412,16 @@ function calculateEmployeeDynamicPenalties($conn, $employeeId, $dateFrom, $dateT
         }
     }
 
-    $automatedTotal = $absenceFine + $missedUpdatesFine;
+    $automatedTotal = $absenceFine + $missedUpdatesFine + $shortHoursFine;
 
     return [
         'total' => $automatedTotal + $manualFine,
         'automated_total' => $automatedTotal,
         'absence_count' => $absenceCount,
         'absence_fine' => $absenceFine,
+        'short_hours_count' => $shortHoursCount,
+        'short_hours_seconds' => $shortHoursSeconds,
+        'short_hours_fine' => $shortHoursFine,
         'missed_updates_total' => $missedUpdatesTotal,
         'missed_updates_fined_count' => $missedUpdatesFinedCount,
         'missed_updates_fine' => $missedUpdatesFine,
@@ -1275,6 +1501,18 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
                 'dynamic' => true,
             ];
         }
+        if (!empty($data['short_hours_fine'])) {
+            $reason = buildShortHoursPenaltyReason($data['short_hours'], $data['short_hours_seconds']);
+            $rows[] = [
+                'id' => 0,
+                'reason' => $reason,
+                'amount' => $data['short_hours_fine'],
+                'created_at' => penaltyCreatedAtForMonth($month),
+                'type' => classifyPenaltyType($reason),
+                'penalty_month' => $month,
+                'dynamic' => true,
+            ];
+        }
     }
 
     $manualResult = $conn->query("
@@ -1311,6 +1549,12 @@ function buildEmployeePenaltyReportRows($conn, $employeeId, $dateFrom, $dateTo, 
         'missed_updates' => [
             'label' => 'Missed Updates Fines',
             'description' => '3 free per month, then PKR 1,000 each',
+            'count' => 0,
+            'total' => 0.0,
+        ],
+        'short_hours' => [
+            'label' => 'Short Working Hours',
+            'description' => 'PKR ' . number_format(SHORT_HOURS_PENALTY_AMOUNT) . ' per shift under 8 worked hours (1h break excluded)',
             'count' => 0,
             'total' => 0.0,
         ],
@@ -1369,6 +1613,15 @@ function classifyPenaltyType($reason) {
         ];
     }
 
+    if (strpos($reason, 'monthly short hours') !== false) {
+        return [
+            'key' => 'short_hours',
+            'label' => 'Short Working Hours',
+            'badge' => 'warning',
+            'description' => 'PKR ' . number_format(SHORT_HOURS_PENALTY_AMOUNT) . ' per shift under 8 worked hours (1h break excluded)',
+        ];
+    }
+
     if (strpos($reason, 'unapproved request') !== false) {
         return [
             'key' => 'request_violation',
@@ -1396,6 +1649,8 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
     $daily = [];
     $monthly = [];
     $totalMissed = 0;
+    $totalWorkedSeconds = 0;
+    $totalShortShifts = 0;
 
     foreach ($shiftsList as $shift) {
         $breakdown = getMissedUpdatesBreakdownForShift($conn, $employeeId, $shift, $auditTimestamp);
@@ -1406,10 +1661,14 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
             return $slot['label'];
         }, $breakdown['hourly']);
 
+        $work = getShiftWorkSummary($shift, $auditTimestamp);
+        $workFineable = isShiftShortHoursFineable($conn, $employeeId, $shift, $auditTimestamp, $work);
+
         $daily[] = [
             'shift_id' => (int) $shift['id'],
             'date' => $shiftDate,
             'start_time' => $shift['start_time'],
+            'end_time' => $shift['end_time'] ?? null,
             'status' => strtolower(trim($shift['status'] ?? '')),
             'hourly_missed' => $breakdown['hourly_count'],
             'hourly_filled' => $breakdown['hourly_filled'],
@@ -1417,6 +1676,8 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
             'missed_slots' => $missedLabels,
             'summary_missed' => $breakdown['summary_missed'],
             'total_missed' => $breakdown['total'],
+            'work' => $work,
+            'short_hours_fineable' => $workFineable,
         ];
 
         if (!isset($monthly[$monthKey])) {
@@ -1426,6 +1687,9 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
                 'hourly_missed' => 0,
                 'summary_missed' => 0,
                 'total_missed' => 0,
+                'worked_seconds' => 0,
+                'short_hours_shifts' => 0,
+                'short_hours_seconds' => 0,
             ];
         }
 
@@ -1433,7 +1697,18 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
         $monthly[$monthKey]['hourly_missed'] += $breakdown['hourly_count'];
         $monthly[$monthKey]['summary_missed'] += $breakdown['summary_count'];
         $monthly[$monthKey]['total_missed'] += $breakdown['total'];
+        if (!$work['is_stale']) {
+            $monthly[$monthKey]['worked_seconds'] += $work['worked_seconds'];
+            $totalWorkedSeconds += $work['worked_seconds'];
+        }
+        if ($workFineable) {
+            $monthly[$monthKey]['short_hours_shifts']++;
+            $monthly[$monthKey]['short_hours_seconds'] += $work['short_seconds'];
+        }
         $totalMissed += $breakdown['total'];
+        if ($workFineable) {
+            $totalShortShifts++;
+        }
     }
 
     krsort($monthly);
@@ -1443,6 +1718,10 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
 
     return [
         'total_missed' => $totalMissed,
+        'total_worked_seconds' => $totalWorkedSeconds,
+        'total_worked_label' => formatWorkDuration($totalWorkedSeconds),
+        'short_hours_shifts' => $totalShortShifts,
+        'short_hours_fine' => calculateShortHoursFineAmount($totalShortShifts),
         'daily' => $daily,
         'monthly' => array_values($monthly),
     ];
@@ -1610,6 +1889,7 @@ function recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, $mont
             reason LIKE 'Monthly Shift Absences%'
             OR reason LIKE 'Monthly Missed Hourly Updates%'
             OR reason LIKE 'Monthly Missed Updates%'
+            OR reason LIKE 'Monthly Short Hours%'
         )
     ");
 
@@ -1800,11 +2080,28 @@ function runMonthlyPenaltyAuditForEmployee($conn, $emp, $month, $auditEndDate) {
         ");
     }
 
+    $shortHours = summariseShortHoursForShifts($conn, $user_id, $shiftsList, $auditTimestamp);
+
+    if ($shortHours['fine'] > 0) {
+        $fineAmount = $shortHours['fine'];
+        $reason = mysqli_real_escape_string(
+            $conn,
+            buildShortHoursPenaltyReason($shortHours['count'], $shortHours['short_seconds'])
+        );
+        $conn->query("
+            INSERT INTO penalties (employee_id, reason, amount, created_at)
+            VALUES ('$user_id', '$reason', '$fineAmount', '$createdAt')
+        ");
+    }
+
     return [
         'absences' => $missedShiftsCount,
         'absence_dates' => $absenceDates,
         'missed_updates' => $totalMissedUpdates,
         'missed_updates_fine' => calculateMissedUpdatesFineAmount($totalMissedUpdates),
+        'short_hours' => $shortHours['count'],
+        'short_hours_dates' => $shortHours['dates'],
+        'short_hours_fine' => $shortHours['fine'],
     ];
 }
 
@@ -1838,6 +2135,7 @@ function runMonthlyPenaltyAudit($conn, $month = null) {
                 reason LIKE 'Monthly Shift Absences%'
                 OR reason LIKE 'Monthly Missed Hourly Updates%'
                 OR reason LIKE 'Monthly Missed Updates%'
+                OR reason LIKE 'Monthly Short Hours%'
             )
         ");
 

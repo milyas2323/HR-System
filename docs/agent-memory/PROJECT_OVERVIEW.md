@@ -69,12 +69,20 @@ hr-system/
 - Evening shift model; **7 required** 15-minute slots (7:00 PM–1:15 AM windows) — see `HOURLY_UPDATES_REQUIRED` and `getHourlySlotDefinitionsForShift()` in `includes/functions.php`.
 - One submission per employee per shift per slot (DB unique key).
 
+### Working hours & break (`includes/functions.php`)
+
+- Every shift must deliver **8 hours of dedicated work** (`SHIFT_REQUIRED_WORK_SECONDS`).
+- The **1-hour break is deducted from clock-in → clock-out whether it is taken or not** (`SHIFT_BREAK_ALLOWANCE_SECONDS`), so a complete workday spans **9 hours** (`SHIFT_REQUIRED_SPAN_SECONDS`). Skipping the break does not allow leaving an hour early.
+- Breaks are not individually tracked — the deduction is flat, so no schema exists for them.
+- `getShiftWorkSummary()` returns span / break / worked / short seconds plus labels for any shift row; open shifts are measured against the audit timestamp, and an open shift past 12h (`SHIFT_STALE_OPEN_SECONDS`) is capped and flagged `is_stale` (hours unverifiable).
+
 ### Penalties (`admin/cron_penalty_engine.php`)
 
 - Working days: Mon–Fri; Sat/Sun excluded.
 - Shift window documented in cron header: ~6:00 PM–3:00 AM.
 - Absence (no shift start): PKR 5,000 per missed weekday shift.
 - Missed hourly/end reports: 3 free per month, then PKR 1,000 each (monthly recount deletes prior automated penalty rows for that month).
+- Short working hours: PKR 1,000 per **closed weekday** shift under 8 worked hours (`SHORT_HOURS_PENALTY_AMOUNT`). Waived by an approved *Early Sign-off* or *Extended Break* request on that date; open shifts are never fined. Reason string `Monthly Short Hours%`, penalty key `short_hours`.
 
 ### Geofencing
 
@@ -86,6 +94,7 @@ hr-system/
 - `addPenalty()`, `getUserIP()`, `parseUserAgent()`, `calculateDistance()`
 - `verifyPassword()` / `hashPassword()`
 - Hourly slot helpers: `getHourlySlotDefinitionsForShift`, `hasHourlyUpdateInSlot`, `countMissedHourlySlotsForShift`, `getDatabaseNowTimestamp`
+- Working hours helpers: `getShiftWorkSummary`, `summariseShortHoursForShifts`, `isShiftShortHoursFineable`, `hasApprovedShortHoursWaiver`, `calculateShortHoursFineAmount`, `buildShortHoursPenaltyReason`, `formatWorkDuration`
 
 ## Conventions for agents
 

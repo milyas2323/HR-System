@@ -92,6 +92,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxat
     exit();
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['short_hours_relaxation'])) {
+    $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
+    $grantShiftId = (int) ($_POST['shift_id'] ?? 0);
+    $adminName = $_SESSION['user']['name'] ?? 'Admin';
+    $revoke = !empty($_POST['revoke']);
+
+    if ($grantEmployeeId > 0 && $grantShiftId > 0) {
+        $grantResult = $revoke
+            ? revokeAdminRelaxationForShiftShortHours($conn, $grantEmployeeId, $grantShiftId)
+            : grantAdminRelaxationForShiftShortHours($conn, $grantEmployeeId, $grantShiftId, $adminName);
+        $_SESSION['msg'] = $grantResult['message'];
+    } else {
+        $_SESSION['msg'] = 'Invalid short-hours waiver request.';
+    }
+
+    $redirect = 'dashboard.php?page=reports&employee_id=' . $grantEmployeeId;
+    if (!empty($_POST['date_from']) && !empty($_POST['date_to'])) {
+        $redirect .= '&date_from=' . urlencode($_POST['date_from']) . '&date_to=' . urlencode($_POST['date_to']);
+    }
+    if (!empty($_POST['hourly_all'])) {
+        $redirect .= '&hourly_all=1';
+    } elseif (!empty($_POST['hourly_from']) && !empty($_POST['hourly_to'])) {
+        $redirect .= '&hourly_from=' . urlencode($_POST['hourly_from']) . '&hourly_to=' . urlencode($_POST['hourly_to']);
+    }
+    if (!empty($_POST['hourly_sort']) && $_POST['hourly_sort'] === 'asc') {
+        $redirect .= '&hourly_sort=asc';
+    }
+    header('Location: ' . $redirect);
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxation_month'])) {
     $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
     $penaltyMonth = trim($_POST['penalty_month'] ?? '');

@@ -678,6 +678,10 @@ if ($hourlyShowAll) {
                                     <span class="badge danger" style="font-size: 0.65rem;">
                                         <?php echo htmlspecialchars($work['short_label']); ?> short · PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?>
                                     </span>
+                                <?php } elseif ($dayRow['short_hours_relaxed']) { ?>
+                                    <span class="badge success" style="font-size: 0.65rem;">
+                                        <?php echo htmlspecialchars($work['short_label']); ?> short · waived by admin
+                                    </span>
                                 <?php } else { ?>
                                     <span class="badge warning" style="font-size: 0.65rem;">
                                         <?php echo htmlspecialchars($work['short_label']); ?> short · not fined

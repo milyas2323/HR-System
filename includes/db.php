@@ -158,4 +158,20 @@ if ($checkRequestPenalty && $checkRequestPenalty->num_rows == 0) {
     $conn->query("ALTER TABLE employee_requests ADD COLUMN penalty_applied TINYINT(1) NOT NULL DEFAULT 0 AFTER reviewed_at");
     $conn->query("ALTER TABLE employee_requests ADD COLUMN penalty_amount DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER penalty_applied");
 }
+
+// 13. Admin waivers for the short-working-hours fine (one row per waived shift)
+$checkShortHoursRelax = $conn->query("SHOW TABLES LIKE 'short_hours_relaxations'");
+if ($checkShortHoursRelax && $checkShortHoursRelax->num_rows == 0) {
+    $conn->query("CREATE TABLE short_hours_relaxations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_id INT NOT NULL,
+        shift_id INT NOT NULL,
+        shift_date DATE DEFAULT NULL,
+        note VARCHAR(255) DEFAULT NULL,
+        granted_by VARCHAR(100) DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_employee_shift_short_hours (employee_id, shift_id),
+        KEY idx_short_hours_relax_date (shift_date)
+    )");
+}
 ?>

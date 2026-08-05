@@ -97,3 +97,16 @@ CREATE TABLE IF NOT EXISTS employee_requests (
 -- 11. Penalty tracking on employee requests (rejected / unrequested = PKR 5,000 fine)
 ALTER TABLE employee_requests ADD COLUMN penalty_applied TINYINT(1) NOT NULL DEFAULT 0 AFTER reviewed_at;
 ALTER TABLE employee_requests ADD COLUMN penalty_amount DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER penalty_applied;
+
+-- 12. Admin waivers for the short-working-hours fine (one row per waived shift)
+CREATE TABLE IF NOT EXISTS short_hours_relaxations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    shift_id INT NOT NULL,
+    shift_date DATE DEFAULT NULL,
+    note VARCHAR(255) DEFAULT NULL,
+    granted_by VARCHAR(100) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_employee_shift_short_hours (employee_id, shift_id),
+    KEY idx_short_hours_relax_date (shift_date)
+);

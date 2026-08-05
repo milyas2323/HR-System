@@ -668,7 +668,8 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         <h2>Missed Updates — Daily Breakdown</h2>
         <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">
             Per workday shift: which 15-minute windows were missed and whether the end report was submitted.
-            Use <strong>Grant relaxation</strong> to auto-credit missed hourly slots (admin placeholder logs).
+            Use <strong>Grant relaxation</strong> to auto-credit missed hourly slots (admin placeholder logs),
+            or <strong>Waive short hours</strong> to cancel the PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?> fine for a shift that finished under <?php echo formatWorkDuration(SHIFT_REQUIRED_WORK_SECONDS); ?>.
             <?php if ($dateFilterActive) { ?>
                 Use <strong>Yesterday</strong> above to audit the previous day quickly.
             <?php } ?>
@@ -716,6 +717,10 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                                 <span class="badge danger" style="font-size: 0.65rem;">
                                     <?php echo htmlspecialchars($work['short_label']); ?> short · PKR <?php echo number_format(SHORT_HOURS_PENALTY_AMOUNT); ?>
                                 </span>
+                            <?php } elseif ($dayRow['short_hours_relaxed']) { ?>
+                                <span class="badge success" style="font-size: 0.65rem;">
+                                    <?php echo htmlspecialchars($work['short_label']); ?> short · waived by admin
+                                </span>
                             <?php } else { ?>
                                 <span class="badge warning" style="font-size: 0.65rem;">
                                     <?php echo htmlspecialchars($work['short_label']); ?> short · not fined
@@ -750,6 +755,7 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                         </td>
                         <td><strong style="color: <?php echo $dayRow['total_missed'] > 0 ? 'var(--danger)' : 'var(--success)'; ?>;"><?php echo $dayRow['total_missed']; ?></strong></td>
                         <td>
+                            <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
                             <?php if ($dayRow['hourly_missed'] > 0) { ?>
                                 <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('Credit <?php echo (int) $dayRow['hourly_missed']; ?> missed hourly slot(s) for <?php echo date('d M Y', strtotime($dayRow['date'])); ?>? This adds grandfathered placeholder logs.');">
                                     <input type="hidden" name="grant_hourly_relaxation" value="1">
@@ -772,9 +778,44 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                                         Grant relaxation
                                     </button>
                                 </form>
-                            <?php } else { ?>
+                            <?php } ?>
+
+                            <?php if ($dayRow['short_hours_fineable'] || $dayRow['short_hours_relaxed']) {
+                                $isRelaxed = $dayRow['short_hours_relaxed'];
+                                $confirmText = $isRelaxed
+                                    ? 'Re-apply the PKR ' . number_format(SHORT_HOURS_PENALTY_AMOUNT) . ' short-hours fine for ' . date('d M Y', strtotime($dayRow['date'])) . '?'
+                                    : 'Waive the PKR ' . number_format(SHORT_HOURS_PENALTY_AMOUNT) . ' short-hours fine for ' . date('d M Y', strtotime($dayRow['date'])) . ' (' . $dayRow['work']['short_label'] . ' short)? Penalties for that month are recalculated.';
+                            ?>
+                                <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('<?php echo htmlspecialchars($confirmText, ENT_QUOTES); ?>');">
+                                    <input type="hidden" name="short_hours_relaxation" value="1">
+                                    <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                                    <input type="hidden" name="shift_id" value="<?php echo (int) $dayRow['shift_id']; ?>">
+                                    <?php if ($isRelaxed) { ?>
+                                        <input type="hidden" name="revoke" value="1">
+                                    <?php } ?>
+                                    <?php if ($dateFilterActive) { ?>
+                                        <input type="hidden" name="date_from" value="<?php echo htmlspecialchars($date_from); ?>">
+                                        <input type="hidden" name="date_to" value="<?php echo htmlspecialchars($date_to); ?>">
+                                    <?php } ?>
+                                    <?php if ($hourlyShowAll) { ?>
+                                        <input type="hidden" name="hourly_all" value="1">
+                                    <?php } elseif ($hourlyDateFilterActive) { ?>
+                                        <input type="hidden" name="hourly_from" value="<?php echo htmlspecialchars($hourly_from); ?>">
+                                        <input type="hidden" name="hourly_to" value="<?php echo htmlspecialchars($hourly_to); ?>">
+                                    <?php } ?>
+                                    <?php if ($hourly_sort === 'asc') { ?>
+                                        <input type="hidden" name="hourly_sort" value="asc">
+                                    <?php } ?>
+                                    <button type="submit" class="<?php echo $isRelaxed ? 'btn-danger' : 'btn-secondary'; ?>" style="padding: 6px 10px; font-size: 0.75rem; white-space: nowrap;">
+                                        <?php echo $isRelaxed ? 'Undo hours waiver' : 'Waive short hours'; ?>
+                                    </button>
+                                </form>
+                            <?php } ?>
+
+                            <?php if ($dayRow['hourly_missed'] === 0 && !$dayRow['short_hours_fineable'] && !$dayRow['short_hours_relaxed']) { ?>
                                 <span style="color: var(--text-muted); font-size: 0.8rem;">—</span>
                             <?php } ?>
+                            </div>
                         </td>
                     </tr>
                 <?php }

@@ -880,6 +880,15 @@ function formatWorkDuration($seconds) {
 }
 
 /**
+ * Shortfall label rounded up to the next minute, so a few seconds short never
+ * reads as "0h 00m short" next to a fine.
+ */
+function formatShortfallDuration($seconds) {
+    $seconds = max(0, (int) $seconds);
+    return formatWorkDuration((int) (ceil($seconds / 60) * 60));
+}
+
+/**
  * Working hours for one shift: clock-in to clock-out minus the 1h break
  * allowance. Open shifts are measured against the audit timestamp.
  */
@@ -939,7 +948,7 @@ function getShiftWorkSummary($shiftRow, $auditTimestamp = null) {
     $summary['span_label'] = formatWorkDuration($span);
     $summary['break_label'] = formatWorkDuration($break);
     $summary['worked_label'] = formatWorkDuration($worked);
-    $summary['short_label'] = formatWorkDuration($short);
+    $summary['short_label'] = formatShortfallDuration($short);
 
     return $summary;
 }
@@ -969,8 +978,118 @@ function hasApprovedShortHoursWaiver($conn, $employeeId, $shiftDate) {
 }
 
 /**
+ * Whether an admin has waived the short-hours fine for one shift.
+ */
+function isShiftShortHoursRelaxed($conn, $employeeId, $shiftId) {
+    $employeeId = (int) $employeeId;
+    $shiftId = (int) $shiftId;
+    if ($employeeId <= 0 || $shiftId <= 0) {
+        return false;
+    }
+
+    $result = $conn->query("
+        SELECT id FROM short_hours_relaxations
+        WHERE employee_id='$employeeId' AND shift_id='$shiftId'
+        LIMIT 1
+    ");
+
+    return ($result && $result->num_rows > 0);
+}
+
+/**
+ * Admin: waive the short-hours fine for one shift and rebuild that month.
+ */
+function grantAdminRelaxationForShiftShortHours($conn, $employeeId, $shiftId, $grantedBy = 'Admin', $note = '') {
+    $employeeId = (int) $employeeId;
+    $shiftId = (int) $shiftId;
+    $grantedBy = trim((string) $grantedBy) ?: 'Admin';
+
+    $shiftResult = $conn->query("
+        SELECT * FROM shifts
+        WHERE id='$shiftId' AND employee_id='$employeeId'
+        LIMIT 1
+    ");
+    if (!$shiftResult || $shiftResult->num_rows === 0) {
+        return ['success' => false, 'granted' => false, 'message' => 'Shift not found for this employee.'];
+    }
+
+    $shift = $shiftResult->fetch_assoc();
+    $shiftDate = date('Y-m-d', strtotime($shift['start_time']));
+
+    if (isShiftShortHoursRelaxed($conn, $employeeId, $shiftId)) {
+        return [
+            'success' => true,
+            'granted' => false,
+            'message' => 'Short-hours fine for ' . date('d M Y', strtotime($shiftDate)) . ' is already waived.',
+        ];
+    }
+
+    $summary = getShiftWorkSummary($shift, getDatabaseNowTimestamp($conn));
+    if (!$summary['is_short']) {
+        return [
+            'success' => false,
+            'granted' => false,
+            'message' => 'That shift delivered the required hours — nothing to waive.',
+        ];
+    }
+
+    $shiftDateEsc = mysqli_real_escape_string($conn, $shiftDate);
+    $grantedByEsc = mysqli_real_escape_string($conn, $grantedBy);
+    $noteEsc = mysqli_real_escape_string($conn, trim((string) $note));
+
+    $ok = $conn->query("
+        INSERT INTO short_hours_relaxations (employee_id, shift_id, shift_date, note, granted_by)
+        VALUES ('$employeeId', '$shiftId', '$shiftDateEsc', '$noteEsc', '$grantedByEsc')
+    ");
+
+    if (!$ok) {
+        return ['success' => false, 'granted' => false, 'message' => 'Could not waive the fine: ' . $conn->error];
+    }
+
+    recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, date('Y-m', strtotime($shiftDate)));
+
+    return [
+        'success' => true,
+        'granted' => true,
+        'message' => 'Short-hours fine waived for ' . date('d M Y', strtotime($shiftDate))
+            . ' (' . $summary['short_label'] . ' short). Penalties recalculated.',
+    ];
+}
+
+/**
+ * Admin: undo a short-hours waiver and rebuild that month.
+ */
+function revokeAdminRelaxationForShiftShortHours($conn, $employeeId, $shiftId) {
+    $employeeId = (int) $employeeId;
+    $shiftId = (int) $shiftId;
+
+    if (!isShiftShortHoursRelaxed($conn, $employeeId, $shiftId)) {
+        return ['success' => false, 'revoked' => false, 'message' => 'No short-hours waiver found for that shift.'];
+    }
+
+    $conn->query("
+        DELETE FROM short_hours_relaxations
+        WHERE employee_id='$employeeId' AND shift_id='$shiftId'
+    ");
+
+    $shiftResult = $conn->query("SELECT start_time FROM shifts WHERE id='$shiftId' LIMIT 1");
+    $shiftDate = ($shiftResult && $shiftResult->num_rows > 0)
+        ? date('Y-m-d', strtotime($shiftResult->fetch_assoc()['start_time']))
+        : date('Y-m-d');
+
+    recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, date('Y-m', strtotime($shiftDate)));
+
+    return [
+        'success' => true,
+        'revoked' => true,
+        'message' => 'Short-hours waiver removed for ' . date('d M Y', strtotime($shiftDate)) . '. Penalties recalculated.',
+    ];
+}
+
+/**
  * Whether a shift carries the short-hours fine: closed, weekday, under the
- * required working hours, and no approved request covering that day.
+ * required working hours, no approved request covering that day, and not
+ * waived by an admin.
  */
 function isShiftShortHoursFineable($conn, $employeeId, $shiftRow, $auditTimestamp = null, $workSummary = null) {
     $summary = $workSummary ?? getShiftWorkSummary($shiftRow, $auditTimestamp);
@@ -983,6 +1102,10 @@ function isShiftShortHoursFineable($conn, $employeeId, $shiftRow, $auditTimestam
         return false;
     }
     if ((int) date('N', $startTs) >= 6) {
+        return false;
+    }
+
+    if (isShiftShortHoursRelaxed($conn, $employeeId, $shiftRow['id'] ?? 0)) {
         return false;
     }
 
@@ -1678,6 +1801,7 @@ function buildEmployeeMissedUpdatesReport($conn, $employeeId, $shiftsList, $audi
             'total_missed' => $breakdown['total'],
             'work' => $work,
             'short_hours_fineable' => $workFineable,
+            'short_hours_relaxed' => isShiftShortHoursRelaxed($conn, $employeeId, $shift['id']),
         ];
 
         if (!isset($monthly[$monthKey])) {

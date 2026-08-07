@@ -383,6 +383,48 @@ function processEmployeeProfileUpload($conn, $employeeId, $fileInput) {
 }
 
 /**
+ * Decode base64 data, working around hosts that disable base64_decode().
+ */
+function decodeBase64Payload($encoded) {
+    $encoded = preg_replace('/[^A-Za-z0-9+\/]/', '', (string) $encoded);
+    if ($encoded === '') {
+        return '';
+    }
+
+    if (function_exists('base64_decode')) {
+        $decoded = base64_decode($encoded, true);
+        return $decoded === false ? '' : $decoded;
+    }
+
+    if (function_exists('imap_base64')) {
+        $decoded = imap_base64($encoded);
+        return $decoded === false ? '' : $decoded;
+    }
+
+    static $lookup = null;
+    if ($lookup === null) {
+        $lookup = array_flip(str_split('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'));
+    }
+
+    $chunks = [];
+    $buffer = 0;
+    $bits = 0;
+    $length = strlen($encoded);
+
+    for ($i = 0; $i < $length; $i++) {
+        $buffer = ($buffer << 6) | $lookup[$encoded[$i]];
+        $bits += 6;
+
+        if ($bits >= 8) {
+            $bits -= 8;
+            $chunks[] = chr(($buffer >> $bits) & 0xFF);
+        }
+    }
+
+    return implode('', $chunks);
+}
+
+/**
  * Process employee shift check-in.
  */
 function processEmployeeStartShift($conn, $employeeId, $postData) {
@@ -414,14 +456,16 @@ function processEmployeeStartShift($conn, $employeeId, $postData) {
     if (!empty($postData['screenshot_data'])) {
         $image = str_replace('data:image/png;base64,', '', $postData['screenshot_data']);
         $image = str_replace(' ', '+', $image);
-        $imageData = base64_decode($image);
+        $imageData = decodeBase64Payload($image);
         $folder = __DIR__ . '/../uploads/screenshots/';
         if (!is_dir($folder)) {
             mkdir($folder, 0777, true);
         }
-        $fileName = time() . '_' . $employeeId . '.png';
-        file_put_contents($folder . $fileName, $imageData);
-        $fileName = mysqli_real_escape_string($conn, $fileName);
+        if ($imageData !== '') {
+            $fileName = time() . '_' . $employeeId . '.png';
+            file_put_contents($folder . $fileName, $imageData);
+            $fileName = mysqli_real_escape_string($conn, $fileName);
+        }
     }
 
     $ip = mysqli_real_escape_string($conn, getUserIP());

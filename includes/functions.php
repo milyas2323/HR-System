@@ -1954,17 +1954,88 @@ function getEmployeeAbsenceStartDate($conn, $userId, $monthStart) {
 }
 
 /**
+ * Self-healing check for the absence-waiver table. Returns
+ * ['ready' => bool, 'note' => bool] so a server whose schema is behind (or
+ * whose DB user cannot CREATE/ALTER) degrades quietly instead of throwing —
+ * mysqli raises exceptions by default on PHP 8.1+, which would 500 the page.
+ */
+function getAbsenceRelaxationsTableState($conn) {
+    static $state = null;
+    if ($state !== null) {
+        return $state;
+    }
+
+    $state = ['ready' => false, 'note' => false];
+
+    try {
+        $table = @$conn->query("SHOW TABLES LIKE 'absence_relaxations'");
+        if (!$table || $table->num_rows === 0) {
+            @$conn->query("CREATE TABLE IF NOT EXISTS absence_relaxations (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                employee_id INT NOT NULL,
+                absence_date DATE NOT NULL,
+                note VARCHAR(255) DEFAULT NULL,
+                granted_by VARCHAR(100) DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_employee_absence_date (employee_id, absence_date),
+                KEY idx_absence_relax_date (absence_date)
+            )");
+            $table = @$conn->query("SHOW TABLES LIKE 'absence_relaxations'");
+        }
+
+        if (!$table || $table->num_rows === 0) {
+            return $state;
+        }
+        $state['ready'] = true;
+
+        $note = @$conn->query("SHOW COLUMNS FROM absence_relaxations LIKE 'note'");
+        if ($note && $note->num_rows === 0) {
+            @$conn->query("ALTER TABLE absence_relaxations ADD COLUMN note VARCHAR(255) DEFAULT NULL AFTER absence_date");
+            $note = @$conn->query("SHOW COLUMNS FROM absence_relaxations LIKE 'note'");
+        }
+        $state['note'] = ($note && $note->num_rows > 0);
+    } catch (Throwable $e) {
+        // No CREATE/ALTER rights: keep whatever was confirmed above.
+    }
+
+    return $state;
+}
+
+/**
+ * Admin waiver row for a weekday absence, or null when the day is still fined.
+ */
+function getAbsenceRelaxationRow($conn, $employeeId, $absenceDate) {
+    $state = getAbsenceRelaxationsTableState($conn);
+    if (!$state['ready']) {
+        return null;
+    }
+
+    $employeeId = (int) $employeeId;
+    $absenceDate = mysqli_real_escape_string($conn, $absenceDate);
+    $noteSelect = $state['note'] ? 'note' : 'NULL AS note';
+
+    try {
+        $result = @$conn->query("
+            SELECT id, $noteSelect, granted_by, created_at
+            FROM absence_relaxations
+            WHERE employee_id='$employeeId' AND absence_date='$absenceDate'
+            LIMIT 1
+        ");
+    } catch (Throwable $e) {
+        return null;
+    }
+
+    if (!$result || $result->num_rows === 0) {
+        return null;
+    }
+    return $result->fetch_assoc();
+}
+
+/**
  * Whether admin granted relaxation for a weekday absence.
  */
 function isAbsenceDateRelaxed($conn, $employeeId, $absenceDate) {
-    $employeeId = (int) $employeeId;
-    $absenceDate = mysqli_real_escape_string($conn, $absenceDate);
-    $result = $conn->query("
-        SELECT id FROM absence_relaxations
-        WHERE employee_id='$employeeId' AND absence_date='$absenceDate'
-        LIMIT 1
-    ");
-    return ($result && $result->num_rows > 0);
+    return getAbsenceRelaxationRow($conn, $employeeId, $absenceDate) !== null;
 }
 
 /**
@@ -1990,9 +2061,15 @@ function getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month, $auditEndDa
     $weekdays = getWeekdaysBetweenDates($rangeStart, $auditEndDate);
 
     foreach ($weekdays as $date) {
-        $relaxed = isAbsenceDateRelaxed($conn, $employeeId, $date);
-        if ($relaxed) {
-            $rows[] = ['date' => $date, 'relaxed' => true];
+        $relaxation = getAbsenceRelaxationRow($conn, $employeeId, $date);
+        if ($relaxation !== null) {
+            $rows[] = [
+                'date' => $date,
+                'relaxed' => true,
+                'note' => $relaxation['note'],
+                'granted_by' => $relaxation['granted_by'],
+                'granted_at' => $relaxation['created_at'],
+            ];
             continue;
         }
 
@@ -2018,7 +2095,13 @@ function getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month, $auditEndDa
             continue;
         }
 
-        $rows[] = ['date' => $date, 'relaxed' => false];
+        $rows[] = [
+            'date' => $date,
+            'relaxed' => false,
+            'note' => null,
+            'granted_by' => null,
+            'granted_at' => null,
+        ];
     }
 
     return $rows;
@@ -2041,6 +2124,49 @@ function getEmployeeAbsenceDatesInRange($conn, $employeeId, $dateFrom, $dateTo) 
                 $rows[] = $row;
             }
         }
+        $month = date('Y-m', strtotime($month . '-01 +1 month'));
+    }
+
+    usort($rows, function ($a, $b) {
+        return strcmp($b['date'], $a['date']);
+    });
+
+    return $rows;
+}
+
+/**
+ * Absence days behind the shift-absence fine in a range, with waiver state.
+ * Uses the same audit window as calculateEmployeeDynamicPenalties(), so the
+ * un-waived rows here are exactly the days charged at PKR 5,000.
+ */
+function buildEmployeeAbsenceDayRowsInRange($conn, $employeeId, $dateFrom, $dateTo) {
+    $employeeId = (int) $employeeId;
+    $rows = [];
+    $month = date('Y-m', strtotime($dateFrom));
+    $endMonth = date('Y-m', strtotime($dateTo));
+
+    while ($month <= $endMonth) {
+        $monthStart = max($dateFrom, $month . '-01');
+        $monthEnd = min($dateTo, date('Y-m-t', strtotime($month . '-01')));
+        $auditEndDate = $monthEnd;
+
+        if ($month === date('Y-m')) {
+            $yesterday = date('Y-m-d', strtotime('yesterday'));
+            if (strtotime($yesterday) >= strtotime($month . '-01')) {
+                $auditEndDate = min($monthEnd, $yesterday);
+            }
+        }
+
+        if (strtotime($auditEndDate) >= strtotime($month . '-01')) {
+            foreach (getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month, $auditEndDate) as $row) {
+                if ($row['date'] < $monthStart || $row['date'] > $monthEnd) {
+                    continue;
+                }
+                $row['month'] = $month;
+                $rows[] = $row;
+            }
+        }
+
         $month = date('Y-m', strtotime($month . '-01 +1 month'));
     }
 
@@ -2102,10 +2228,16 @@ function recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, $mont
 /**
  * Admin: grant relaxation for one weekday absence.
  */
-function grantAdminRelaxationForAbsenceDate($conn, $employeeId, $absenceDate, $grantedBy = 'Admin') {
+function grantAdminRelaxationForAbsenceDate($conn, $employeeId, $absenceDate, $grantedBy = 'Admin', $note = '') {
+    $state = getAbsenceRelaxationsTableState($conn);
+    if (!$state['ready']) {
+        return ['success' => false, 'credited' => 0, 'message' => 'Absence waivers are unavailable: the absence_relaxations table is missing and could not be created.'];
+    }
+
     $employeeId = (int) $employeeId;
     $grantedBy = trim((string) $grantedBy) ?: 'Admin';
     $grantedByEsc = mysqli_real_escape_string($conn, $grantedBy);
+    $noteEsc = mysqli_real_escape_string($conn, substr(trim((string) $note), 0, 255));
     $absenceDate = trim((string) $absenceDate);
     $ts = strtotime($absenceDate);
 
@@ -2134,10 +2266,20 @@ function grantAdminRelaxationForAbsenceDate($conn, $employeeId, $absenceDate, $g
     }
 
     $dateEsc = mysqli_real_escape_string($conn, $absenceDate);
-    $ok = $conn->query("
-        INSERT INTO absence_relaxations (employee_id, absence_date, granted_by)
-        VALUES ('$employeeId', '$dateEsc', '$grantedByEsc')
-    ");
+    $ok = false;
+    try {
+        $ok = $state['note']
+            ? @$conn->query("
+                INSERT INTO absence_relaxations (employee_id, absence_date, note, granted_by)
+                VALUES ('$employeeId', '$dateEsc', " . ($noteEsc === '' ? 'NULL' : "'$noteEsc'") . ", '$grantedByEsc')
+            ")
+            : @$conn->query("
+                INSERT INTO absence_relaxations (employee_id, absence_date, granted_by)
+                VALUES ('$employeeId', '$dateEsc', '$grantedByEsc')
+            ");
+    } catch (Throwable $e) {
+        return ['success' => false, 'credited' => 0, 'message' => 'Could not save relaxation: ' . $e->getMessage()];
+    }
 
     if (!$ok) {
         return ['success' => false, 'credited' => 0, 'message' => 'Could not save relaxation: ' . $conn->error];
@@ -2148,29 +2290,120 @@ function grantAdminRelaxationForAbsenceDate($conn, $employeeId, $absenceDate, $g
     return [
         'success' => true,
         'credited' => 1,
-        'message' => 'Relaxation granted for absence on ' . date('d M Y', $ts) . '. Penalties recalculated.',
+        'message' => 'Shift absence on ' . date('d M Y', $ts) . ' waived off. Penalties recalculated.',
+    ];
+}
+
+/**
+ * Admin: waive off several absence days at once (e.g. a public holiday block).
+ */
+function grantAdminRelaxationForAbsenceDates($conn, $employeeId, $dates, $grantedBy = 'Admin', $note = '') {
+    $credited = 0;
+    $skipped = 0;
+    $lastMessage = '';
+
+    foreach ((array) $dates as $date) {
+        $result = grantAdminRelaxationForAbsenceDate($conn, $employeeId, $date, $grantedBy, $note);
+        if (!empty($result['credited'])) {
+            $credited++;
+        } else {
+            $skipped++;
+            $lastMessage = $result['message'];
+        }
+    }
+
+    if ($credited === 0) {
+        return [
+            'success' => false,
+            'credited' => 0,
+            'message' => $lastMessage ?: 'No billable absence day to waive off.',
+        ];
+    }
+
+    $message = 'Shift absence waived off for ' . $credited . ' day(s) — PKR '
+        . number_format($credited * 5000) . ' cancelled. Penalties recalculated.';
+    if ($skipped > 0) {
+        $message .= ' ' . $skipped . ' day(s) skipped (already waived or not billable).';
+    }
+
+    return ['success' => true, 'credited' => $credited, 'message' => $message];
+}
+
+/**
+ * Admin: re-apply the absence fine for one waived day.
+ */
+function revokeAdminRelaxationForAbsenceDate($conn, $employeeId, $absenceDate) {
+    $employeeId = (int) $employeeId;
+    $ts = strtotime(trim((string) $absenceDate));
+
+    if ($ts === false) {
+        return ['success' => false, 'revoked' => 0, 'message' => 'Invalid absence date.'];
+    }
+
+    $absenceDate = date('Y-m-d', $ts);
+    if (!isAbsenceDateRelaxed($conn, $employeeId, $absenceDate)) {
+        return ['success' => false, 'revoked' => 0, 'message' => 'No absence waiver found for that day.'];
+    }
+
+    $dateEsc = mysqli_real_escape_string($conn, $absenceDate);
+    try {
+        @$conn->query("
+            DELETE FROM absence_relaxations
+            WHERE employee_id='$employeeId' AND absence_date='$dateEsc'
+        ");
+    } catch (Throwable $e) {
+        return ['success' => false, 'revoked' => 0, 'message' => 'Could not remove waiver: ' . $e->getMessage()];
+    }
+
+    recalculateAutomatedPenaltiesForEmployeeMonth($conn, $employeeId, date('Y-m', $ts));
+
+    return [
+        'success' => true,
+        'revoked' => 1,
+        'message' => 'Absence waiver removed for ' . date('d M Y', $ts) . '. Penalties recalculated.',
+    ];
+}
+
+/**
+ * Admin: re-apply the absence fine for several waived days.
+ */
+function revokeAdminRelaxationForAbsenceDates($conn, $employeeId, $dates) {
+    $revoked = 0;
+    $lastMessage = '';
+
+    foreach ((array) $dates as $date) {
+        $result = revokeAdminRelaxationForAbsenceDate($conn, $employeeId, $date);
+        if (!empty($result['revoked'])) {
+            $revoked++;
+        } else {
+            $lastMessage = $result['message'];
+        }
+    }
+
+    if ($revoked === 0) {
+        return ['success' => false, 'revoked' => 0, 'message' => $lastMessage ?: 'No absence waiver found.'];
+    }
+
+    return [
+        'success' => true,
+        'revoked' => $revoked,
+        'message' => 'Absence waiver removed for ' . $revoked . ' day(s). Penalties recalculated.',
     ];
 }
 
 /**
  * Admin: grant relaxation for all billable absences in a month.
  */
-function grantAdminRelaxationForEmployeeAbsenceMonth($conn, $employeeId, $month, $grantedBy = 'Admin') {
+function grantAdminRelaxationForEmployeeAbsenceMonth($conn, $employeeId, $month, $grantedBy = 'Admin', $note = '') {
     $employeeId = (int) $employeeId;
-    $grantedBy = trim((string) $grantedBy) ?: 'Admin';
-    $grantedByEsc = mysqli_real_escape_string($conn, $grantedBy);
     $credited = 0;
 
     foreach (getEmployeeAbsenceDatesForMonth($conn, $employeeId, $month) as $row) {
         if (!empty($row['relaxed'])) {
             continue;
         }
-        $dateEsc = mysqli_real_escape_string($conn, $row['date']);
-        $ok = $conn->query("
-            INSERT INTO absence_relaxations (employee_id, absence_date, granted_by)
-            VALUES ('$employeeId', '$dateEsc', '$grantedByEsc')
-        ");
-        if ($ok) {
+        $result = grantAdminRelaxationForAbsenceDate($conn, $employeeId, $row['date'], $grantedBy, $note);
+        if (!empty($result['credited'])) {
             $credited++;
         }
     }

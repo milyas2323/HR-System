@@ -388,6 +388,17 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
         $penaltyWaivedCount = $penaltyReport['waived_count'];
         $detailPenaltyData = $penaltyReport['dynamic'];
 
+        $absenceDayRows = buildEmployeeAbsenceDayRowsInRange($conn, $employee_id, $detailPenaltyFrom, $detailPenaltyTo);
+        $absenceFineableByMonth = [];
+        $absenceWaivedDays = 0;
+        foreach ($absenceDayRows as $absenceDayRow) {
+            if (!empty($absenceDayRow['relaxed'])) {
+                $absenceWaivedDays++;
+                continue;
+            }
+            $absenceFineableByMonth[$absenceDayRow['month']][] = $absenceDayRow['date'];
+        }
+
         $totalPenaltyAllTime = reportsGetPenaltySum($conn, $employee_id);
         $totalPenaltyPeriod = $detailPenaltyData['total'];
         $grossSalary = floatval($empDetails['salary']);
@@ -539,6 +550,8 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
             unless an <em>Early Sign-off</em> or <em>Extended Break</em> request was approved for that day.
             Admin-logged fines (misconduct, unapproved requests) can be <strong>waived off</strong> from the Action column —
             the record stays for audit but nothing is charged — or <strong>deleted</strong> permanently.
+            Shift absences can be <strong>waived off</strong> too (public holidays, office closures): the whole month from the
+            Action column, or single days from the <strong>Shift Absence Days</strong> table below.
         </p>
 
         <?php if ($pendingMonthMissed > 0) { ?>
@@ -636,9 +649,32 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                             } ?>
                         </td>
                         <td>
-                            <?php if (!$pIsStored) { ?>
+                            <?php if (!$pIsStored) {
+                                $pAbsenceDates = ($pType['key'] === 'absence')
+                                    ? ($absenceFineableByMonth[$pRow['penalty_month'] ?? ''] ?? [])
+                                    : [];
+                                if (count($pAbsenceDates) > 0) {
+                                    $pAbsenceConfirm = 'Waive off all ' . count($pAbsenceDates) . ' shift absence day(s) in '
+                                        . date('F Y', strtotime(($pRow['penalty_month'] ?? date('Y-m')) . '-01'))
+                                        . ' (' . $pAmountLabel . ')? Use the Shift Absence Days table below to waive single days only.';
+                            ?>
+                                <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('<?php echo htmlspecialchars($pAbsenceConfirm, ENT_QUOTES); ?>');">
+                                    <input type="hidden" name="grant_absence_relaxation_date" value="1">
+                                    <input type="hidden" name="absence_dates" value="<?php echo htmlspecialchars(implode(',', $pAbsenceDates)); ?>">
+                                    <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                                    <?php reportsPreserveQueryHiddenFields($employee_id, $dateFilterActive, $date_from, $date_to, $hourlyDateFilterActive, $hourly_from, $hourly_to, $hourlyShowAll, $hourlyDateFilterDefault, $hourly_sort); ?>
+                                    <input type="text" name="absence_note" placeholder="Reason (e.g. public holiday)" maxlength="255" style="width: 180px; padding: 5px 8px; font-size: 0.75rem; margin-bottom: 6px;">
+                                    <button type="submit" class="btn-secondary" style="padding: 6px 10px; font-size: 0.75rem; white-space: nowrap;">
+                                        Waive off all <?php echo count($pAbsenceDates); ?> day(s)
+                                    </button>
+                                </form>
+                                <div style="color: var(--text-muted); font-size: 0.7rem; margin-top: 4px;">
+                                    Single days → Shift Absence Days table below
+                                </div>
+                            <?php } else { ?>
                                 <span style="color: var(--text-muted); font-size: 0.8rem;">Auto — waive in daily log</span>
-                            <?php } else {
+                            <?php }
+                            } else {
                                 $pWaiveConfirm = $pIsWaived
                                     ? 'Re-apply the ' . $pAmountLabel . ' fine from ' . $pDateLabel . '?'
                                     : 'Waive off the ' . $pAmountLabel . ' fine from ' . $pDateLabel . '? The record is kept but nothing is charged.';
@@ -676,6 +712,93 @@ function reportsGetPenaltySum($conn, $employeeId, $month = null) {
                     <tr>
                         <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">
                             No penalty records<?php echo $dateFilterActive ? ' in the selected date range' : ''; ?>.
+                        </td>
+                    </tr>
+                <?php } ?>
+            </table>
+        </div>
+    </div>
+
+    <!-- SHIFT ABSENCE DAYS -->
+    <div class="card" style="border-color: rgba(239, 68, 68, 0.25);">
+        <h2>Shift Absence Days</h2>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
+            Every weekday in <?php echo htmlspecialchars($detailPeriodLabel); ?> with no shift start and no approved leave — PKR 5,000 each.
+            Use <strong>Waive off</strong> for days that should not be charged (public holidays, office closures);
+            the day stays listed for audit but the fine is cancelled and that month's penalties are recalculated.
+            <strong>Re-apply fine</strong> reverses it.
+        </p>
+
+        <?php if ($absenceWaivedDays > 0) { ?>
+            <div class="alert success" style="margin-bottom: 16px;">
+                <span>✓</span>
+                <span><strong><?php echo (int) $absenceWaivedDays; ?></strong> absence day(s) waived off in this period — PKR <?php echo number_format($absenceWaivedDays * 5000); ?> not charged.</span>
+            </div>
+        <?php } ?>
+
+        <div class="table-box">
+            <table>
+                <tr>
+                    <th>Date</th>
+                    <th>Day</th>
+                    <th>Status</th>
+                    <th>Fine</th>
+                    <th>Action</th>
+                </tr>
+                <?php if (count($absenceDayRows) > 0) {
+                    foreach ($absenceDayRows as $aRow) {
+                        $aIsWaived = !empty($aRow['relaxed']);
+                        $aDateLabel = date('d M Y', strtotime($aRow['date']));
+                        $aConfirm = $aIsWaived
+                            ? 'Re-apply the PKR 5,000 shift absence fine for ' . $aDateLabel . '?'
+                            : 'Waive off the PKR 5,000 shift absence fine for ' . $aDateLabel . '? Penalties for that month are recalculated.';
+                ?>
+                    <tr>
+                        <td style="white-space: nowrap;"><strong><?php echo $aDateLabel; ?></strong></td>
+                        <td style="font-size: 0.85rem; color: var(--text-muted);"><?php echo date('l', strtotime($aRow['date'])); ?></td>
+                        <td>
+                            <?php if ($aIsWaived) { ?>
+                                <span class="badge success">Waived off</span>
+                                <div style="margin-top: 6px; font-size: 0.75rem; color: var(--success);">
+                                    by <?php echo htmlspecialchars($aRow['granted_by'] ?: 'Admin'); ?>
+                                    <?php echo !empty($aRow['granted_at']) ? ' on ' . date('d M Y', strtotime($aRow['granted_at'])) : ''; ?>
+                                    <?php echo !empty($aRow['note']) ? ' — ' . htmlspecialchars($aRow['note']) : ''; ?>
+                                </div>
+                            <?php } else { ?>
+                                <span class="badge danger">Absent · fined</span>
+                            <?php } ?>
+                        </td>
+                        <td style="font-weight: 700; white-space: nowrap; color: <?php echo $aIsWaived ? 'var(--text-muted)' : 'var(--danger)'; ?>;">
+                            <?php if ($aIsWaived) { ?>
+                                <span style="text-decoration: line-through;">PKR 5,000</span>
+                                <div style="color: var(--success); font-size: 0.75rem; font-weight: 600;">PKR 0 charged</div>
+                            <?php } else { ?>
+                                PKR 5,000
+                            <?php } ?>
+                        </td>
+                        <td>
+                            <form method="POST" action="dashboard.php?page=reports&amp;employee_id=<?php echo $employee_id; ?>" style="margin: 0;" onsubmit="return confirm('<?php echo htmlspecialchars($aConfirm, ENT_QUOTES); ?>');">
+                                <input type="hidden" name="grant_absence_relaxation_date" value="1">
+                                <input type="hidden" name="absence_dates" value="<?php echo htmlspecialchars($aRow['date']); ?>">
+                                <input type="hidden" name="employee_id" value="<?php echo $employee_id; ?>">
+                                <?php if ($aIsWaived) { ?>
+                                    <input type="hidden" name="revoke" value="1">
+                                <?php } ?>
+                                <?php reportsPreserveQueryHiddenFields($employee_id, $dateFilterActive, $date_from, $date_to, $hourlyDateFilterActive, $hourly_from, $hourly_to, $hourlyShowAll, $hourlyDateFilterDefault, $hourly_sort); ?>
+                                <?php if (!$aIsWaived) { ?>
+                                    <input type="text" name="absence_note" placeholder="Reason (e.g. public holiday)" maxlength="255" style="width: 180px; padding: 5px 8px; font-size: 0.75rem; margin-bottom: 6px;">
+                                <?php } ?>
+                                <button type="submit" class="<?php echo $aIsWaived ? 'btn-danger' : 'btn-secondary'; ?>" style="padding: 6px 10px; font-size: 0.75rem; white-space: nowrap;">
+                                    <?php echo $aIsWaived ? 'Re-apply fine' : 'Waive off'; ?>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                <?php }
+                } else { ?>
+                    <tr>
+                        <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                            No absence days<?php echo $dateFilterActive ? ' in the selected date range' : ' this month'; ?>.
                         </td>
                     </tr>
                 <?php } ?>

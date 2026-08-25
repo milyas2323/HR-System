@@ -175,7 +175,27 @@ if ($checkShortHoursRelax && $checkShortHoursRelax->num_rows == 0) {
     )");
 }
 
-// 14. Admin waivers on stored penalty rows (misconduct / unapproved-request fines)
+// 14. Admin waivers for the shift-absence fine (one row per waived weekday)
+$checkAbsenceRelax = $conn->query("SHOW TABLES LIKE 'absence_relaxations'");
+if ($checkAbsenceRelax && $checkAbsenceRelax->num_rows == 0) {
+    $conn->query("CREATE TABLE absence_relaxations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_id INT NOT NULL,
+        absence_date DATE NOT NULL,
+        note VARCHAR(255) DEFAULT NULL,
+        granted_by VARCHAR(100) DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_employee_absence_date (employee_id, absence_date),
+        KEY idx_absence_relax_date (absence_date)
+    )");
+} else {
+    $checkAbsenceRelaxNote = $conn->query("SHOW COLUMNS FROM absence_relaxations LIKE 'note'");
+    if ($checkAbsenceRelaxNote && $checkAbsenceRelaxNote->num_rows == 0) {
+        $conn->query("ALTER TABLE absence_relaxations ADD COLUMN note VARCHAR(255) DEFAULT NULL AFTER absence_date");
+    }
+}
+
+// 15. Admin waivers on stored penalty rows (misconduct / unapproved-request fines)
 $checkPenaltyWaive = $conn->query("SHOW COLUMNS FROM penalties LIKE 'waived'");
 if ($checkPenaltyWaive && $checkPenaltyWaive->num_rows == 0) {
     $conn->query("ALTER TABLE penalties ADD COLUMN waived TINYINT(1) NOT NULL DEFAULT 0");

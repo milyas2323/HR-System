@@ -66,11 +66,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_hourly_relaxati
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxation_date'])) {
     $grantEmployeeId = (int) ($_POST['employee_id'] ?? 0);
-    $absenceDate = trim($_POST['absence_date'] ?? '');
     $adminName = $_SESSION['user']['name'] ?? 'Admin';
+    $absenceNote = trim($_POST['absence_note'] ?? '');
+    $revokeAbsence = !empty($_POST['revoke']);
 
-    if ($grantEmployeeId > 0 && $absenceDate !== '') {
-        $grantResult = grantAdminRelaxationForAbsenceDate($conn, $grantEmployeeId, $absenceDate, $adminName);
+    $absenceDates = [];
+    $absenceDateInput = (string) ($_POST['absence_dates'] ?? $_POST['absence_date'] ?? '');
+    foreach (explode(',', $absenceDateInput) as $absenceDate) {
+        $absenceDate = trim($absenceDate);
+        if ($absenceDate !== '') {
+            $absenceDates[] = $absenceDate;
+        }
+    }
+
+    if ($grantEmployeeId > 0 && count($absenceDates) > 0) {
+        $grantResult = $revokeAbsence
+            ? revokeAdminRelaxationForAbsenceDates($conn, $grantEmployeeId, $absenceDates)
+            : grantAdminRelaxationForAbsenceDates($conn, $grantEmployeeId, $absenceDates, $adminName, $absenceNote);
         $_SESSION['msg'] = $grantResult['message'];
     } else {
         $_SESSION['msg'] = 'Invalid absence relaxation request.';
@@ -166,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['grant_absence_relaxat
     $adminName = $_SESSION['user']['name'] ?? 'Admin';
 
     if ($grantEmployeeId > 0 && preg_match('/^\d{4}-\d{2}$/', $penaltyMonth)) {
-        $grantResult = grantAdminRelaxationForEmployeeAbsenceMonth($conn, $grantEmployeeId, $penaltyMonth, $adminName);
+        $grantResult = grantAdminRelaxationForEmployeeAbsenceMonth($conn, $grantEmployeeId, $penaltyMonth, $adminName, trim($_POST['absence_note'] ?? ''));
         $_SESSION['msg'] = $grantResult['message'];
     } else {
         $_SESSION['msg'] = 'Invalid absence relaxation request.';

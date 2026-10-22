@@ -63,7 +63,8 @@ if ($isToday) {
             (SELECT ta.window_start FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_window,
             (SELECT ta.is_idle FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_idle,
             (SELECT ta.max_idle_seconds FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_max_idle,
-            (SELECT MAX(t.last_used_at) FROM api_tokens t WHERE t.user_id = u.id AND t.revoked = 0) AS agent_seen
+            (SELECT MAX(t.last_used_at) FROM api_tokens t WHERE t.user_id = u.id AND t.revoked = 0) AS agent_seen,
+            (SELECT t2.last_location FROM api_tokens t2 WHERE t2.user_id = u.id AND t2.revoked = 0 AND t2.last_location IS NOT NULL ORDER BY t2.last_used_at DESC LIMIT 1) AS last_location
         FROM users u
         LEFT JOIN shifts s ON s.employee_id = u.id AND s.status = 'active'
         WHERE u.role = 'employee'
@@ -236,6 +237,7 @@ function liveBadge($status) {
                 </div>
                 <div style="font-size:0.78rem; color:var(--text-muted); margin-top:8px; line-height:1.6;">
                     <div>Shift: <?php echo $r['open_shift_id'] ? '🟢 open' : '— none'; ?></div>
+                    <div>📍 <?php echo htmlspecialchars(!empty($r['last_location']) ? $r['last_location'] : 'Locating…'); ?></div>
                     <div>Agent last seen: <?php echo htmlspecialchars($seen); ?></div>
                     <?php if (in_array($r['live_status'], ['idle','away'], true) && !empty($r['last_max_idle'])) { ?>
                         <div>Idle for ~<?php echo htmlspecialchars(formatWorkDuration((int) $r['last_max_idle'])); ?></div>
@@ -255,7 +257,7 @@ function liveBadge($status) {
 <div class="card">
     <h2>Daily Working Hours — <?php echo date('d M Y', strtotime($selDate)); ?></h2>
     <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:16px;">
-        <strong>Dedicated Working Hrs</strong> = active at-the-keyboard time recorded <em>while the shift was open</em> — the official worked hours.
+        <strong>Dedicated Working Hrs</strong> = active time (keyboard &amp; mouse) recorded <em>while the shift was open</em> — the official worked hours.
         <strong>Total Active</strong> includes activity outside a shift (tracking runs all the time).
         <strong>Shift Span</strong> is clock-out − clock-in − break.
     </p>
@@ -345,7 +347,9 @@ function liveBadge($status) {
             while ($shot = $shots->fetch_assoc()) {
                 $url = '../' . ltrim($shot['file'], '/');
         ?>
-            <div style="width:220px; border:1px solid #27324a; border-radius:10px; overflow:hidden; background:var(--card, #1e293b);">
+            <div class="trk-card" style="width:220px; position:relative; border:1px solid #27324a; border-radius:10px; overflow:hidden; background:var(--card, #1e293b);">
+                <button type="button" class="trk-del" data-id="<?php echo (int) $shot['id']; ?>" title="Delete this screenshot"
+                        style="position:absolute; top:6px; right:6px; z-index:2; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:rgba(220,38,38,0.92); color:#fff; cursor:pointer; font-size:14px; line-height:28px; text-align:center;">🗑</button>
                 <img src="<?php echo htmlspecialchars($url); ?>" alt="screenshot"
                      class="trk-shot"
                      data-full="<?php echo htmlspecialchars($url); ?>"
@@ -426,5 +430,35 @@ function liveBadge($status) {
     document.getElementById('trkShotClose').addEventListener('click', closeShot);
     modal.addEventListener('click', function (e) { if (e.target === modal) closeShot(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeShot(); });
+
+    // Delete a screenshot inline (no page reload).
+    document.querySelectorAll('.trk-del').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (!confirm('Delete this screenshot permanently?')) return;
+            var id = btn.getAttribute('data-id');
+            btn.disabled = true;
+            btn.textContent = '…';
+            fetch('tracker_delete.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'id=' + encodeURIComponent(id),
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d && d.success) {
+                    var card = btn.closest('.trk-card');
+                    if (card) { card.style.transition = 'opacity .2s'; card.style.opacity = '0'; setTimeout(function () { card.remove(); }, 200); }
+                } else {
+                    alert('Could not delete: ' + ((d && d.error) || 'error'));
+                    btn.disabled = false; btn.textContent = '🗑';
+                }
+            })
+            .catch(function () {
+                alert('Network error while deleting.');
+                btn.disabled = false; btn.textContent = '🗑';
+            });
+        });
+    });
 })();
 </script>

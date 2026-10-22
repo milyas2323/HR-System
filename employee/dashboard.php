@@ -365,6 +365,20 @@ if ($hourlyShowAll) {
 <div class="main">
 
     <?php if($page == 'home'){ ?>
+        <!-- DESKTOP TRACKER DOWNLOAD -->
+        <div class="card" style="margin-bottom: 20px; border-left: 4px solid var(--accent);">
+            <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 8px;">🖥️ Desktop Time Tracker</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 12px;">
+                Install the Workforce Hub Tracker on your work computer. It runs in the background and records your working hours automatically — just sign in once with this same account.
+            </p>
+            <a href="../downloads/WorkforceHubTracker-Setup.exe" class="btn glowing-element" style="text-decoration: none;" download>
+                ⬇️ Download Tracker (Windows)
+            </a>
+            <p style="color: var(--text-muted); font-size: 0.72rem; margin-top: 10px;">
+                If Windows shows a warning, click “More info → Run anyway”.
+            </p>
+        </div>
+
         <!-- PREVIOUS MONTHS SALARY SLIP -->
         <div class="card" style="margin-bottom: 20px;">
             <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 12px;">Previous Months Salary Slip</h2>

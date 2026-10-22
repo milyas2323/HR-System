@@ -126,6 +126,9 @@ function api_authenticate($conn) {
     $touch->execute();
     $touch->close();
 
+    // Refresh the agent's current location (throttled internally to ~30 min / IP change).
+    updateAgentLocation($conn, $token, api_client_ip());
+
     return $user;
 }
 

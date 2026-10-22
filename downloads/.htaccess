@@ -1,0 +1,4 @@
+# Allow the tracker installer to be downloaded (served as a file, not executed/blocked).
+<FilesMatch "\.(exe|zip)$">
+    ForceType application/octet-stream
+</FilesMatch>

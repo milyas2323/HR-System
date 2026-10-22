@@ -116,5 +116,83 @@ if (!function_exists('ensureTrackerSchema')) {
             KEY idx_shot_shift (shift_id),
             KEY idx_shot_captured (captured_at)
         )");
+
+        // 4. Location columns on api_tokens (current agent location, IP-geolocated).
+        $check = $conn->query("SHOW COLUMNS FROM api_tokens LIKE 'last_location'");
+        if ($check && $check->num_rows == 0) {
+            $conn->query("ALTER TABLE api_tokens
+                ADD COLUMN last_location VARCHAR(255) DEFAULT NULL,
+                ADD COLUMN last_lat VARCHAR(32) DEFAULT NULL,
+                ADD COLUMN last_lng VARCHAR(32) DEFAULT NULL,
+                ADD COLUMN located_ip VARCHAR(45) DEFAULT NULL,
+                ADD COLUMN located_at DATETIME DEFAULT NULL");
+        }
+    }
+}
+
+/**
+ * Look up an approximate location for a public IP (city-level), using the same
+ * free ip-api.com service the login audit already relies on. Returns null for
+ * private/local IPs or on any failure. Called rarely (throttled by the caller).
+ */
+if (!function_exists('trackerGeolocateIp')) {
+    function trackerGeolocateIp($ip) {
+        $ip = trim((string) $ip);
+        if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return null; // private/local/reserved — no public geolocation
+        }
+        $url = 'http://ip-api.com/json/' . urlencode($ip) . '?fields=status,country,regionName,city,lat,lon';
+        $ctx = stream_context_create(['http' => ['timeout' => 3]]);
+        $raw = @file_get_contents($url, false, $ctx);
+        if ($raw === false) { return null; }
+        $data = json_decode($raw, true);
+        if (!is_array($data) || ($data['status'] ?? '') !== 'success') { return null; }
+        $parts = array_filter([$data['city'] ?? '', $data['regionName'] ?? '', $data['country'] ?? '']);
+        return [
+            'location' => implode(', ', $parts),
+            'lat' => isset($data['lat']) ? (string) $data['lat'] : null,
+            'lng' => isset($data['lon']) ? (string) $data['lon'] : null,
+        ];
+    }
+}
+
+/**
+ * Update the stored location for an agent token, throttled so ip-api is only
+ * called when the IP changes or the cached location is older than 30 minutes.
+ */
+if (!function_exists('updateAgentLocation')) {
+    function updateAgentLocation($conn, $token, $ip) {
+        $ip = trim((string) $ip);
+        if ($token === '' ) { return; }
+
+        $stmt = $conn->prepare("SELECT located_ip, located_at FROM api_tokens WHERE token = ? LIMIT 1");
+        $stmt->bind_param('s', $token);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res ? $res->fetch_assoc() : null;
+        $stmt->close();
+        if (!$row) { return; }
+
+        $fresh = !empty($row['located_at']) && (time() - strtotime($row['located_at']) < 1800);
+        if ($fresh && ($row['located_ip'] === $ip)) {
+            return; // recent and same IP — nothing to do
+        }
+
+        // Private/local IP: record it plainly without an external lookup.
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            $loc = 'Local / private network';
+            $u = $conn->prepare("UPDATE api_tokens SET last_location = ?, last_lat = NULL, last_lng = NULL, located_ip = ?, located_at = NOW() WHERE token = ?");
+            $u->bind_param('sss', $loc, $ip, $token);
+            $u->execute();
+            $u->close();
+            return;
+        }
+
+        $geo = trackerGeolocateIp($ip);
+        if ($geo === null) { return; }
+        $u = $conn->prepare("UPDATE api_tokens SET last_location = ?, last_lat = ?, last_lng = ?, located_ip = ?, located_at = NOW() WHERE token = ?");
+        $u->bind_param('sssss', $geo['location'], $geo['lat'], $geo['lng'], $ip, $token);
+        $u->execute();
+        $u->close();
     }
 }

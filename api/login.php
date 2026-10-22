@@ -43,6 +43,9 @@ if (!$ins->execute()) {
 }
 $ins->close();
 
+// Seed the agent's location immediately so admins see it without waiting for the first ping.
+updateAgentLocation($conn, $token, $ip);
+
 api_respond([
     'success'      => true,
     'token'        => $token,

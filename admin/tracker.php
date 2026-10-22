@@ -60,6 +60,7 @@ if ($isToday) {
     $liveSql = "
         SELECT u.id, u.name,
             s.id AS open_shift_id,
+            s.current_location AS shift_location,
             (SELECT ta.window_start FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_window,
             (SELECT ta.is_idle FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_idle,
             (SELECT ta.max_idle_seconds FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_max_idle,
@@ -237,7 +238,22 @@ function liveBadge($status) {
                 </div>
                 <div style="font-size:0.78rem; color:var(--text-muted); margin-top:8px; line-height:1.6;">
                     <div>Shift: <?php echo $r['open_shift_id'] ? '🟢 open' : '— none'; ?></div>
-                    <div>📍 <?php echo htmlspecialchars(!empty($r['last_location']) ? $r['last_location'] : 'Locating…'); ?></div>
+                    <?php
+                        $shiftLoc = trim((string) ($r['shift_location'] ?? ''));
+                        if ($shiftLoc !== '' && stripos($shiftLoc, 'unknown') === false) {
+                            $locText = explode(',', $shiftLoc)[0];
+                            $locSrc = 'check-in GPS';
+                        } elseif (!empty($r['last_location'])) {
+                            $locText = $r['last_location'];
+                            $locSrc = 'approx. by IP';
+                        } else {
+                            $locText = 'Locating…';
+                            $locSrc = '';
+                        }
+                    ?>
+                    <div>📍 <?php echo htmlspecialchars($locText); ?>
+                        <?php if ($locSrc) { ?><span style="font-size:0.68rem; opacity:0.7;">(<?php echo $locSrc; ?>)</span><?php } ?>
+                    </div>
                     <div>Agent last seen: <?php echo htmlspecialchars($seen); ?></div>
                     <?php if (in_array($r['live_status'], ['idle','away'], true) && !empty($r['last_max_idle'])) { ?>
                         <div>Idle for ~<?php echo htmlspecialchars(formatWorkDuration((int) $r['last_max_idle'])); ?></div>

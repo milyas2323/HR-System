@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Workforce Hub Tracker</title>
+<style>
+  :root { --blue:#2563eb; --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
+          --ok:#34d399; --warn:#fbbf24; --err:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text); padding:20px; }
+  h1 { font-size:16px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:12px; margin:0 0 16px; }
+  .row { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #27324a; font-size:13px; }
+  .row span:first-child { color:var(--muted); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:middle; }
+  .big { font-size:28px; font-weight:700; margin:6px 0 2px; }
+  .card { background:var(--card); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+  .actions { display:flex; gap:10px; margin-top:4px; }
+  button { flex:1; padding:10px; border:0; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+  .pause { background:#334155; color:#e2e8f0; }
+  .web { background:var(--blue); color:#fff; }
+  .out { background:transparent; color:var(--err); border:1px solid #7f1d1d; }
+</style>
+</head>
+<body>
+  <h1>Workforce Hub Tracker</h1>
+  <p class="sub" id="who">—</p>
+
+  <div class="card">
+    <div style="color:var(--muted); font-size:12px;">Active (at keyboard) today</div>
+    <div class="big" id="active">0h 0m</div>
+    <div id="statusline" style="font-size:13px;"><span class="dot" id="dot"></span><span id="status">—</span></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span>Open shift</span><span id="shift">—</span></div>
+    <div class="row"><span>Connection</span><span id="online">—</span></div>
+    <div class="row"><span>Queued samples</span><span id="queued">0</span></div>
+    <div class="row"><span>Tracking since</span><span id="since">—</span></div>
+    <div class="row" style="border-bottom:0;"><span>Server</span><span id="server">—</span></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function fmt(mins) { return `${Math.floor(mins/60)}h ${mins%60}m`; }
+
+    async function refresh() {
+      const s = await window.tracker.getStatus();
+      $('who').textContent = s.userName ? `${s.userName} · ${s.userEmail}` : (s.userEmail || '—');
+      $('active').textContent = fmt(s.activeMinutesToday || 0);
+      $('status').textContent = s.status + (s.lastError && !s.online ? ` (${s.lastError})` : '');
+      $('shift').textContent = s.hasOpenShift ? 'Yes' : 'No (still tracking)';
+      $('online').textContent = s.online ? 'Connected' : 'Offline';
+      $('queued').textContent = s.queued;
+      $('since').textContent = s.trackingSince || '—';
+      $('server').textContent = s.serverUrl || '—';
+      const dot = $('dot');
+      let c = '#34d399';
+      if (!s.online) c = '#f87171';
+      dot.style.background = c;
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

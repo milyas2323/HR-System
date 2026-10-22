@@ -1,0 +1,36 @@
+{
+  "name": "workforce-hub-tracker",
+  "productName": "Workforce Hub Tracker",
+  "version": "1.0.0",
+  "description": "Desktop activity tracker agent for the Workforce Hub HR system (Windows).",
+  "main": "src/main.js",
+  "author": "Workforce Hub",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^31.7.6",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.workforcehub.tracker",
+    "productName": "Workforce Hub Tracker",
+    "executableName": "GoodLuck",
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

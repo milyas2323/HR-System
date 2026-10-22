@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Workforce Hub Tracker — Sign in</title>
+<style>
+  :root { --blue:#2563eb; --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --err:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text);
+         display:flex; min-height:100vh; align-items:center; justify-content:center; padding:24px; }
+  .card { width:100%; max-width:360px; background:var(--card); border-radius:14px; padding:28px 24px;
+          box-shadow:0 12px 40px rgba(0,0,0,.4); }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.sub { margin:0 0 20px; color:var(--muted); font-size:13px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:14px 0 6px; }
+  input { width:100%; padding:11px 12px; border-radius:9px; border:1px solid #334155; background:#0b1220;
+          color:var(--text); font-size:14px; }
+  input:focus { outline:none; border-color:var(--blue); }
+  button { width:100%; margin-top:22px; padding:12px; border:0; border-radius:9px; background:var(--blue);
+           color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .msg { margin-top:14px; font-size:13px; min-height:18px; color:var(--err); }
+  .brand { width:40px; height:40px; border-radius:10px; background:var(--blue); margin-bottom:14px;
+           display:flex; align-items:center; justify-content:center; font-weight:700; }
+</style>
+</head>
+<body>
+  <form class="card" id="form">
+    <div class="brand">WH</div>
+    <h1>Workforce Hub Tracker</h1>
+    <p class="sub">Sign in with your employee account to start tracking.</p>
+
+    <label for="server">Server URL</label>
+    <input id="server" type="url" placeholder="http://localhost/hr-system" autocomplete="off" required />
+
+    <label for="email">Email</label>
+    <input id="email" type="email" placeholder="you@company.com" autocomplete="username" required />
+
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required />
+
+    <button id="submit" type="submit">Sign in</button>
+    <div class="msg" id="msg"></div>
+  </form>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    // Pre-fill the server URL from the baked-in default so employees only type email + password.
+    (async () => {
+      try {
+        const d = await window.tracker.getDefaults();
+        if (d && d.serverUrl) { $('server').value = d.serverUrl; }
+      } catch (e) { /* leave blank */ }
+      $('email').focus();
+    })();
+
+    $('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('msg').textContent = '';
+      $('submit').disabled = true;
+      $('submit').textContent = 'Signing in…';
+      const res = await window.tracker.login({
+        serverUrl: $('server').value.trim(),
+        email: $('email').value.trim(),
+        password: $('password').value,
+      });
+      if (!res.success) {
+        $('msg').textContent = res.error || 'Sign in failed.';
+        $('submit').disabled = false;
+        $('submit').textContent = 'Sign in';
+      }
+      // On success the main process closes this window.
+    });
+  </script>
+</body>
+</html>

@@ -204,4 +204,10 @@ if ($checkPenaltyWaive && $checkPenaltyWaive->num_rows == 0) {
     $conn->query("ALTER TABLE penalties ADD COLUMN waive_note VARCHAR(255) DEFAULT NULL AFTER waived_by");
     $conn->query("ALTER TABLE penalties ADD INDEX idx_penalty_waived (waived)");
 }
+
+// Activity tracker tables are created by includes/tracker_schema.php (ensureTrackerSchema),
+// invoked from the tracker API and admin page — kept out of db.php so the tracker can be
+// deployed to servers whose db.php has different DB credentials, without touching db.php.
+require_once __DIR__ . '/tracker_schema.php';
+ensureTrackerSchema($conn);
 ?>

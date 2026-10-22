@@ -129,3 +129,54 @@ ALTER TABLE penalties ADD COLUMN waived_at DATETIME DEFAULT NULL AFTER waived;
 ALTER TABLE penalties ADD COLUMN waived_by VARCHAR(150) DEFAULT NULL AFTER waived_at;
 ALTER TABLE penalties ADD COLUMN waive_note VARCHAR(255) DEFAULT NULL AFTER waived_by;
 ALTER TABLE penalties ADD INDEX idx_penalty_waived (waived);
+
+-- 15. API tokens for the desktop activity tracker agent (bearer auth, no PHP session)
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    token VARCHAR(64) NOT NULL,
+    device VARCHAR(255) DEFAULT NULL,
+    ip_address VARCHAR(45) DEFAULT NULL,
+    last_used_at DATETIME DEFAULT NULL,
+    revoked TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_api_token (token),
+    KEY idx_api_token_user (user_id)
+);
+
+-- 16. Tracker activity samples: one row per minute window, active vs idle seconds
+CREATE TABLE IF NOT EXISTS tracker_activity (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    shift_id INT DEFAULT NULL,
+    window_start DATETIME NOT NULL,
+    window_end DATETIME NOT NULL,
+    active_seconds INT NOT NULL DEFAULT 0,
+    idle_seconds INT NOT NULL DEFAULT 0,
+    max_idle_seconds INT NOT NULL DEFAULT 0,
+    is_idle TINYINT(1) NOT NULL DEFAULT 0,
+    device VARCHAR(255) DEFAULT NULL,
+    ip_address VARCHAR(45) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_activity_window (employee_id, shift_id, window_start),
+    KEY idx_activity_employee (employee_id),
+    KEY idx_activity_shift (shift_id),
+    KEY idx_activity_window_start (window_start)
+);
+
+-- 17. Tracker screenshots: periodic full-screen captures uploaded by the desktop agent
+CREATE TABLE IF NOT EXISTS tracker_screenshots (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    shift_id INT DEFAULT NULL,
+    file VARCHAR(255) NOT NULL,
+    captured_at DATETIME NOT NULL,
+    is_idle TINYINT(1) NOT NULL DEFAULT 0,
+    idle_seconds INT NOT NULL DEFAULT 0,
+    device VARCHAR(255) DEFAULT NULL,
+    ip_address VARCHAR(45) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_shot_employee (employee_id),
+    KEY idx_shot_shift (shift_id),
+    KEY idx_shot_captured (captured_at)
+);

@@ -369,6 +369,9 @@ $pendingRequestCount = (int) getEmployeeRequestStatusCounts($conn)['pending'];
         <a class="<?php echo ($page=='attendance') ? 'active-page' : ''; ?>" href="dashboard.php?page=attendance">
             <span>⏰</span> Attendance Logs
         </a>
+        <a class="<?php echo ($page=='tracker') ? 'active-page' : ''; ?>" href="dashboard.php?page=tracker">
+            <span>🖥️</span> Activity Tracker
+        </a>
         <a class="<?php echo ($page=='hourly-update' || $page=='hourly-submit') ? 'active-page' : ''; ?>" href="dashboard.php?page=hourly-update">
             <span>📝</span> Hourly Updates
         </a>
@@ -497,6 +500,7 @@ $pendingRequestCount = (int) getEmployeeRequestStatusCounts($conn)['pending'];
     <?php } else {
         if($page == 'employees') include "employees.php";
         elseif($page == 'attendance') include "attendance.php";
+        elseif($page == 'tracker') include "tracker.php";
         elseif($page == 'hourly-update') include "hourly-update.php";
         elseif($page == 'hourly-submit') include "hourly-submit.php";
         elseif($page == 'penalties') include "penalties.php";

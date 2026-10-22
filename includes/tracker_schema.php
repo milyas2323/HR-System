@@ -11,6 +11,59 @@
  * request.
  */
 
+/** How many days of screenshots to keep. Older images (files + rows) are purged. */
+if (!defined('TRACKER_SCREENSHOT_RETENTION_DAYS')) {
+    define('TRACKER_SCREENSHOT_RETENTION_DAYS', 5);
+}
+
+/**
+ * Delete screenshot files + rows older than the retention window.
+ * Keeps disk usage bounded so the gallery never has to load months of images.
+ */
+if (!function_exists('purgeOldTrackerScreenshots')) {
+    function purgeOldTrackerScreenshots($conn, $days = null) {
+        $days = (int) ($days !== null ? $days : TRACKER_SCREENSHOT_RETENTION_DAYS);
+        if ($days < 1) { $days = 1; }
+
+        $cutoff = date('Y-m-d H:i:s', time() - ($days * 86400));
+        $cutoffEsc = mysqli_real_escape_string($conn, $cutoff);
+
+        // Work in batches so one request never does an unbounded delete.
+        $res = $conn->query("SELECT id, file FROM tracker_screenshots WHERE captured_at < '$cutoffEsc' LIMIT 3000");
+        if (!$res) { return; }
+
+        $ids = [];
+        while ($row = $res->fetch_assoc()) {
+            $rel = ltrim((string) $row['file'], '/');
+            $path = __DIR__ . '/../' . $rel;
+            if (is_file($path)) { @unlink($path); }
+            $ids[] = (int) $row['id'];
+        }
+        if (!empty($ids)) {
+            $conn->query("DELETE FROM tracker_screenshots WHERE id IN (" . implode(',', $ids) . ")");
+        }
+    }
+}
+
+/**
+ * Run the purge at most once every few hours (marker file), so it is safe to
+ * call on every screenshot upload / admin page load without a cron job.
+ */
+if (!function_exists('maybePurgeOldTrackerScreenshots')) {
+    function maybePurgeOldTrackerScreenshots($conn, $everySeconds = 21600) {
+        $dir = __DIR__ . '/../uploads/tracker';
+        if (!is_dir($dir)) { @mkdir($dir, 0777, true); }
+        $marker = $dir . '/.last_purge';
+
+        $now = time();
+        $last = is_file($marker) ? (int) @file_get_contents($marker) : 0;
+        if ($now - $last < $everySeconds) { return; }
+
+        @file_put_contents($marker, (string) $now); // claim the slot first to avoid overlap
+        purgeOldTrackerScreenshots($conn);
+    }
+}
+
 if (!function_exists('ensureTrackerSchema')) {
     function ensureTrackerSchema($conn) {
         // 1. Bearer tokens for the desktop agent (no PHP session).

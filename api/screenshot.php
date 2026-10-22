@@ -96,6 +96,9 @@ if (!$stmt->execute()) {
 $insertId = $stmt->insert_id;
 $stmt->close();
 
+// Opportunistic retention cleanup (throttled internally to ~once per 6h).
+maybePurgeOldTrackerScreenshots($conn);
+
 api_respond([
     'success'     => true,
     'id'          => $insertId,

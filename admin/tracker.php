@@ -15,6 +15,7 @@ include_once "../includes/auth.php";
 include_once "../includes/functions.php";
 include_once "../includes/tracker_schema.php";
 ensureTrackerSchema($conn); // ensure tracker tables exist even if the agent hasn't run yet
+maybePurgeOldTrackerScreenshots($conn); // drop screenshots older than the retention window
 
 if (($_SESSION['user']['role'] ?? '') !== 'admin') {
     exit("Access Denied");
@@ -318,6 +319,9 @@ function liveBadge($status) {
 <!-- SCREENSHOT TIMELINE -->
 <div class="card" id="shots">
     <h2>Screenshots — <?php echo date('d M Y', strtotime($selDate)); ?></h2>
+    <p style="color:var(--text-muted); font-size:0.8rem; margin:-4px 0 14px;">
+        Screenshots are kept for the last <strong><?php echo (int) TRACKER_SCREENSHOT_RETENTION_DAYS; ?> days</strong> and older ones are deleted automatically.
+    </p>
     <form method="GET" action="dashboard.php" style="margin-bottom:16px;">
         <input type="hidden" name="page" value="tracker">
         <input type="hidden" name="t_date" value="<?php echo htmlspecialchars($selDate); ?>">
@@ -342,9 +346,12 @@ function liveBadge($status) {
                 $url = '../' . ltrim($shot['file'], '/');
         ?>
             <div style="width:220px; border:1px solid #27324a; border-radius:10px; overflow:hidden; background:var(--card, #1e293b);">
-                <a href="<?php echo htmlspecialchars($url); ?>" target="_blank">
-                    <img src="<?php echo htmlspecialchars($url); ?>" alt="screenshot" style="width:100%; height:130px; object-fit:cover; display:block;">
-                </a>
+                <img src="<?php echo htmlspecialchars($url); ?>" alt="screenshot"
+                     class="trk-shot"
+                     data-full="<?php echo htmlspecialchars($url); ?>"
+                     data-name="<?php echo htmlspecialchars($shot['name'], ENT_QUOTES); ?>"
+                     data-time="<?php echo date('d M Y, h:i:s A', strtotime($shot['captured_at'])); ?>"
+                     style="width:100%; height:130px; object-fit:cover; display:block; cursor:zoom-in;">
                 <div style="padding:8px 10px; font-size:0.78rem;">
                     <div><strong><?php echo htmlspecialchars($shot['name']); ?></strong></div>
                     <div style="color:var(--text-muted);"><?php echo date('h:i:s A', strtotime($shot['captured_at'])); ?></div>
@@ -361,3 +368,63 @@ function liveBadge($status) {
         <?php } ?>
     </div>
 </div>
+
+<!-- SCREENSHOT LIGHTBOX (in-page preview) -->
+<style>
+    #trkShotModal {
+        position: fixed; inset: 0; z-index: 10000;
+        background: rgba(2, 6, 23, 0.9);
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        padding: 24px;
+    }
+    #trkShotModal.open { display: flex; }
+    #trkShotModal .trk-bar {
+        width: 92%; max-width: 1100px; display: flex; justify-content: space-between; align-items: center;
+        color: #e2e8f0; margin-bottom: 12px; font-size: 0.9rem;
+    }
+    #trkShotModal .trk-close { cursor: pointer; font-size: 1.9rem; line-height: 1; color: #e2e8f0; user-select: none; }
+    #trkShotModal .trk-close:hover { color: #fff; }
+    #trkShotModal img {
+        max-width: 92%; max-height: 82vh; object-fit: contain;
+        border-radius: 8px; box-shadow: 0 16px 50px rgba(0,0,0,0.6); background: #000;
+    }
+    #trkShotModal .trk-hint { color: #94a3b8; font-size: 0.75rem; margin-top: 12px; }
+</style>
+
+<div id="trkShotModal">
+    <div class="trk-bar">
+        <span id="trkShotCaption"></span>
+        <span class="trk-close" id="trkShotClose" title="Close">&times;</span>
+    </div>
+    <img id="trkShotImg" src="" alt="screenshot preview">
+    <div class="trk-hint">Click outside the image or press Esc to close</div>
+</div>
+
+<script>
+(function () {
+    var modal = document.getElementById('trkShotModal');
+    var img = document.getElementById('trkShotImg');
+    var cap = document.getElementById('trkShotCaption');
+    if (!modal) return;
+
+    function openShot(src, name, time) {
+        img.src = src;
+        cap.textContent = (name ? name + '  ·  ' : '') + (time || '');
+        modal.classList.add('open');
+    }
+    function closeShot() {
+        modal.classList.remove('open');
+        img.src = '';
+    }
+
+    document.querySelectorAll('.trk-shot').forEach(function (el) {
+        el.addEventListener('click', function () {
+            openShot(el.getAttribute('data-full'), el.getAttribute('data-name'), el.getAttribute('data-time'));
+        });
+    });
+
+    document.getElementById('trkShotClose').addEventListener('click', closeShot);
+    modal.addEventListener('click', function (e) { if (e.target === modal) closeShot(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeShot(); });
+})();
+</script>

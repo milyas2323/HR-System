@@ -145,12 +145,17 @@ async function flushQueue() {
 }
 
 // ---- Screenshots ----------------------------------------------------------
-function scheduleScreenshot() {
+function scheduleScreenshot(first) {
   if (screenshotTimer) clearTimeout(screenshotTimer);
-  const cfg = config.load();
-  const min = Math.max(1, cfg.screenshotMinMinutes) * 60000;
-  const max = Math.max(min, cfg.screenshotMaxMinutes * 60000);
-  const delay = min + Math.random() * (max - min);
+  let delay;
+  if (first) {
+    delay = 60000; // first capture ~1 min after tracking starts, so it's verifiable quickly
+  } else {
+    const cfg = config.load();
+    const min = Math.max(1, cfg.screenshotMinMinutes) * 60000;
+    const max = Math.max(min, cfg.screenshotMaxMinutes * 60000);
+    delay = min + Math.random() * (max - min);
+  }
   screenshotTimer = setTimeout(doScreenshot, delay);
 }
 
@@ -202,7 +207,7 @@ function startEngine() {
   startWindow(minuteKey(Date.now()));
   sampleTimer = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   flushTimer = setInterval(flushQueue, PING_FLUSH_MS);
-  scheduleScreenshot();
+  scheduleScreenshot(true); // quick first capture, then random 5–10 min
   updateTray();
 }
 

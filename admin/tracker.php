@@ -82,36 +82,7 @@ if ($res) { while ($r = $res->fetch_assoc()) { $employeeOptions[(int) $r['id']] 
 $ACTIVE_WINDOW = 150;   // seconds — activity newer than this == live
 $IDLE_THRESHOLD = 300;  // seconds — away
 
-// ---- Live "Right Now" board (only when the range includes the current work-day) ----
-$liveRows = [];
-if ($rangeIncludesToday) {
-    $liveSql = "
-        SELECT u.id, u.name,
-            s.id AS open_shift_id,
-            s.current_location AS shift_location,
-            (SELECT ta.window_start FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_window,
-            (SELECT ta.is_idle FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_idle,
-            (SELECT ta.max_idle_seconds FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_max_idle,
-            (SELECT MAX(t.last_used_at) FROM api_tokens t WHERE t.user_id = u.id AND t.revoked = 0) AS agent_seen,
-            (SELECT t2.last_location FROM api_tokens t2 WHERE t2.user_id = u.id AND t2.revoked = 0 AND t2.last_location IS NOT NULL ORDER BY t2.last_used_at DESC LIMIT 1) AS last_location
-        FROM users u
-        LEFT JOIN shifts s ON s.employee_id = u.id AND s.status = 'active'
-        WHERE u.role = 'employee' " . ($empFilter > 0 ? " AND u.id = $empFilter " : '') . "
-        ORDER BY u.name ASC
-    ";
-    $res = $conn->query($liveSql);
-    if ($res) {
-        while ($r = $res->fetch_assoc()) {
-            $lastWindowTs = !empty($r['last_window']) ? strtotime($r['last_window']) : 0;
-            $age = $lastWindowTs ? ($dbNowTs - $lastWindowTs) : PHP_INT_MAX;
-            if ($age <= $ACTIVE_WINDOW && (int) $r['last_idle'] === 0) { $r['live_status'] = 'active'; }
-            elseif ($age <= $ACTIVE_WINDOW) { $r['live_status'] = 'idle'; }
-            elseif ($age <= $IDLE_THRESHOLD) { $r['live_status'] = 'away'; }
-            else { $r['live_status'] = 'offline'; }
-            $liveRows[] = $r;
-        }
-    }
-}
+// Live "Right Now" board is loaded via AJAX from tracker_live.php (no page reload).
 
 // ---- Shift Report: one row per shift (accurate clock-in → clock-out) ----
 $shiftRows = [];
@@ -143,6 +114,7 @@ $summary = [];
 $res = $conn->query("
     SELECT ta.employee_id, u.name,
         SUM(CASE WHEN ta.shift_id > 0 THEN ta.active_seconds ELSE 0 END) AS onshift_active_sec,
+        SUM(CASE WHEN ta.shift_id > 0 THEN ta.idle_seconds ELSE 0 END) AS onshift_idle_sec,
         SUM(ta.active_seconds) AS active_sec,
         SUM(ta.idle_seconds)   AS idle_sec,
         COUNT(DISTINCT CASE WHEN ta.shift_id > 0 THEN ta.shift_id END) AS shift_count,
@@ -185,6 +157,23 @@ function trkLiveBadge($status) {
 function trkIdlePct($active, $idle) {
     $tot = $active + $idle;
     return $tot > 0 ? round($idle * 100 / $tot) : 0;
+}
+function trkActivePct($active, $idle) {
+    $tot = $active + $idle;
+    return $tot > 0 ? round($active * 100 / $tot) : 0;
+}
+/** Rating from the active share of shift time → [stars 1-5, label, color]. */
+function trkRating($activePct, $hasData) {
+    if (!$hasData) { return [0, 'No data', 'var(--text-muted)']; }
+    if ($activePct >= 90) { return [5, 'Excellent', 'var(--success)']; }
+    if ($activePct >= 75) { return [4, 'Good', 'var(--success)']; }
+    if ($activePct >= 60) { return [3, 'Average', 'var(--warning)']; }
+    if ($activePct >= 40) { return [2, 'Low', 'var(--warning)']; }
+    return [1, 'Poor', 'var(--danger)'];
+}
+function trkStars($n) {
+    $n = max(0, min(5, (int) $n));
+    return str_repeat('★', $n) . str_repeat('☆', 5 - $n);
 }
 function trkRangeLabel($from, $to) {
     return $from === $to
@@ -251,38 +240,49 @@ function trkRangeLabel($from, $to) {
 </div>
 
 <?php if ($rangeIncludesToday) { ?>
-<!-- LIVE BOARD -->
+<!-- LIVE BOARD (AJAX, no page reload) -->
 <div class="card">
-    <h2>Right Now <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">(auto-refreshes)</span></h2>
-    <div class="grid" style="margin-top:12px;">
-        <?php if (empty($liveRows)) { ?>
-            <p style="color:var(--text-muted);">No employees found.</p>
-        <?php } foreach ($liveRows as $r) {
-            list($label, $color) = trkLiveBadge($r['live_status']);
-            $seen = !empty($r['agent_seen']) ? date('h:i A', strtotime($r['agent_seen'])) : 'never';
-            $shiftLoc = trim((string) ($r['shift_location'] ?? ''));
-            if ($shiftLoc !== '' && stripos($shiftLoc, 'unknown') === false) { $locText = explode(',', $shiftLoc)[0]; $locSrc = 'check-in GPS'; }
-            elseif (!empty($r['last_location'])) { $locText = $r['last_location']; $locSrc = 'approx. by IP'; }
-            else { $locText = 'Locating…'; $locSrc = ''; }
-        ?>
-            <div class="card" style="border-left:4px solid <?php echo $color; ?>; margin:0;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <strong><?php echo htmlspecialchars($r['name']); ?></strong>
-                    <span class="badge" style="background:<?php echo $color; ?>; color:#fff;"><?php echo $label; ?></span>
-                </div>
-                <div style="font-size:0.78rem; color:var(--text-muted); margin-top:8px; line-height:1.6;">
-                    <div>Shift: <?php echo $r['open_shift_id'] ? '🟢 open' : '— none'; ?></div>
-                    <div>📍 <?php echo htmlspecialchars($locText); ?><?php if ($locSrc) { ?> <span style="font-size:0.68rem; opacity:0.7;">(<?php echo $locSrc; ?>)</span><?php } ?></div>
-                    <div>Agent last seen: <?php echo htmlspecialchars($seen); ?></div>
-                    <?php if (in_array($r['live_status'], ['idle','away'], true) && !empty($r['last_max_idle'])) { ?>
-                        <div>Idle for ~<?php echo htmlspecialchars(formatWorkDuration((int) $r['last_max_idle'])); ?></div>
-                    <?php } ?>
-                </div>
-            </div>
-        <?php } ?>
+    <h2>Right Now <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">(live · updated <span id="trkLiveClock">—</span>)</span></h2>
+    <div class="grid" id="trkLiveGrid" style="margin-top:12px;">
+        <p style="color:var(--text-muted);">Loading…</p>
     </div>
 </div>
-<script>setTimeout(function(){ location.reload(); }, 30000);</script>
+<script>
+(function () {
+    var grid = document.getElementById('trkLiveGrid');
+    var clock = document.getElementById('trkLiveClock');
+    if (!grid) return;
+    var empFilter = <?php echo (int) $empFilter; ?>;
+    var colors = { active: 'var(--success)', idle: 'var(--warning)', away: 'var(--warning)', offline: 'var(--text-muted)' };
+    var labels = { active: 'Active', idle: 'Idle', away: 'Away', offline: 'Offline' };
+    function esc(s) { var d = document.createElement('div'); d.textContent = (s == null ? '' : s); return d.innerHTML; }
+    function card(r) {
+        var c = colors[r.status] || colors.offline;
+        var h = '<div class="card" style="border-left:4px solid ' + c + '; margin:0;">';
+        h += '<div style="display:flex; justify-content:space-between; align-items:center;"><strong>' + esc(r.name) + '</strong>';
+        h += '<span class="badge" style="background:' + c + '; color:#fff;">' + labels[r.status] + '</span></div>';
+        h += '<div style="font-size:0.78rem; color:var(--text-muted); margin-top:8px; line-height:1.6;">';
+        h += '<div>Shift: ' + (r.shift_open ? '🟢 open' : '— none') + '</div>';
+        h += '<div>📍 ' + esc(r.location) + (r.loc_src ? ' <span style="font-size:0.68rem; opacity:0.7;">(' + r.loc_src + ')</span>' : '') + '</div>';
+        h += '<div>Agent last seen: ' + esc(r.seen) + '</div>';
+        if (r.idle_label) { h += '<div>Idle for ~' + esc(r.idle_label) + '</div>'; }
+        h += '</div></div>';
+        return h;
+    }
+    function load() {
+        fetch('tracker_live.php?t_emp=' + empFilter, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            if (!d || !d.success) return;
+            grid.innerHTML = d.rows.length ? d.rows.map(card).join('') : '<p style="color:var(--text-muted);">No employees found.</p>';
+            if (clock) clock.textContent = d.now;
+        })
+        .catch(function () {});
+    }
+    load();
+    setInterval(load, 20000);
+})();
+</script>
 <?php } ?>
 
 <!-- SHIFT REPORT (accurate clock-in → clock-out, cross-midnight safe) -->
@@ -351,71 +351,66 @@ function trkRangeLabel($from, $to) {
     </div>
 </div>
 
-<!-- PER-EMPLOYEE SUMMARY -->
-<div class="card">
-    <h2>Per-Employee Summary <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">— <?php echo htmlspecialchars(trkRangeLabel($from, $to)); ?></span></h2>
-    <div class="table-box">
-        <table>
-            <tr>
-                <th>Employee</th>
-                <th>Shifts</th>
-                <th>Dedicated Working (on-shift)</th>
-                <th>Total Active (all)</th>
-                <th>Idle</th>
-                <th>Idle %</th>
-                <th>Longest Idle Gap</th>
-            </tr>
-            <?php if (empty($summary)) { ?>
-                <tr><td colspan="7" style="text-align:center; color:var(--text-muted); padding:30px;">No activity in this range.</td></tr>
-            <?php } else {
-                foreach ($summary as $eid => $s) {
-                    $active = (int) $s['active_sec'];
-                    $onshift = (int) $s['onshift_active_sec'];
-                    $idle = (int) $s['idle_sec'];
-            ?>
-                <tr>
-                    <td><strong><?php echo htmlspecialchars($s['name']); ?></strong></td>
-                    <td><?php echo (int) $s['shift_count']; ?></td>
-                    <td style="color:var(--success); font-weight:700;"><?php echo htmlspecialchars(formatWorkDuration($onshift)); ?></td>
-                    <td style="color:var(--accent);"><?php echo htmlspecialchars(formatWorkDuration($active)); ?></td>
-                    <td style="color:var(--warning);"><?php echo htmlspecialchars(formatWorkDuration($idle)); ?></td>
-                    <td style="color:<?php echo trkIdlePct($active,$idle) >= 40 ? 'var(--danger)' : 'var(--text-muted)'; ?>;"><?php echo trkIdlePct($active, $idle); ?>%</td>
-                    <td><?php echo htmlspecialchars(formatWorkDuration((int) $s['max_idle'])); ?></td>
-                </tr>
-            <?php }
-            } ?>
-        </table>
-    </div>
-</div>
-
-<!-- IDLE RANKING -->
+<!-- PERFORMANCE: clear per-employee worked / idle / active% + auto rating -->
 <?php
-$ranking = [];
+// Build a performance list ranked by active share of shift time (best first).
+$perf = [];
 foreach ($summary as $eid => $s) {
-    $a = (int) $s['active_sec']; $i = (int) $s['idle_sec']; $tot = $a + $i;
-    if ($tot <= 0) { continue; }
-    $ranking[] = ['name' => $s['name'], 'pct' => (int) round($i * 100 / $tot), 'active' => $a, 'idle' => $i];
+    $worked = (int) $s['onshift_active_sec'];   // active during shift = real work
+    $idle   = (int) $s['onshift_idle_sec'];     // idle during shift
+    $hasData = ($worked + $idle) > 0;
+    $apct = trkActivePct($worked, $idle);
+    list($stars, $label, $rcolor) = trkRating($apct, $hasData);
+    $perf[] = [
+        'name' => $s['name'], 'shifts' => (int) $s['shift_count'],
+        'worked' => $worked, 'idle' => $idle, 'apct' => $apct,
+        'stars' => $stars, 'label' => $label, 'rcolor' => $rcolor, 'hasData' => $hasData,
+    ];
 }
-usort($ranking, function ($x, $y) { return $y['pct'] <=> $x['pct']; });
-if (!empty($ranking)) { ?>
+usort($perf, function ($x, $y) {
+    if ($y['stars'] !== $x['stars']) { return $y['stars'] <=> $x['stars']; }
+    return $y['apct'] <=> $x['apct'];
+});
+?>
 <div class="card">
-    <h2>Idle Ranking <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">— most idle first</span></h2>
-    <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:16px;">Green = active share, amber = idle share of tracked time in the range.</p>
-    <?php foreach ($ranking as $row) { ?>
-        <div style="margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:5px; flex-wrap:wrap; gap:4px;">
-                <strong><?php echo htmlspecialchars($row['name']); ?></strong>
-                <span style="color:<?php echo $row['pct'] >= 40 ? 'var(--danger)' : 'var(--text-muted)'; ?>;">
-                    <?php echo $row['pct']; ?>% idle · <?php echo htmlspecialchars(formatWorkDuration($row['active'])); ?> active / <?php echo htmlspecialchars(formatWorkDuration($row['idle'])); ?> idle
-                </span>
+    <h2>Team Performance <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">— <?php echo htmlspecialchars(trkRangeLabel($from, $to)); ?></span></h2>
+    <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:16px;">
+        Ranked best first. <strong style="color:var(--success);">Worked</strong> = active time at the computer during the shift ·
+        <strong style="color:var(--warning);">Idle</strong> = not working during the shift · the <strong>bar</strong> and <strong>★ rating</strong> show how focused each person was.
+    </p>
+    <?php if (empty($perf)) { ?>
+        <p style="color:var(--text-muted);">No activity in this range.</p>
+    <?php } else {
+        foreach ($perf as $i => $p) {
+            $shiftTotal = $p['worked'] + $p['idle'];
+    ?>
+        <div style="display:flex; align-items:center; gap:16px; padding:14px 0; border-bottom:1px solid #27324a; flex-wrap:wrap;">
+            <div style="width:26px; text-align:center; font-weight:700; color:var(--text-muted);"><?php echo $i + 1; ?></div>
+            <div style="flex:1 1 150px; min-width:130px;">
+                <div style="font-weight:700; font-size:1rem;"><?php echo htmlspecialchars($p['name']); ?>
+                    <?php if ($i === 0 && $p['hasData'] && $p['stars'] >= 4) { ?><span class="badge success" style="font-size:0.6rem; margin-left:6px;">TOP</span><?php } ?>
+                </div>
+                <div style="color:<?php echo $p['rcolor']; ?>; font-size:0.9rem; letter-spacing:1px;">
+                    <?php echo trkStars($p['stars']); ?> <span style="font-size:0.72rem; color:var(--text-muted);"><?php echo htmlspecialchars($p['label']); ?> · <?php echo $p['shifts']; ?> shift<?php echo $p['shifts'] === 1 ? '' : 's'; ?></span>
+                </div>
             </div>
-            <div style="height:10px; border-radius:5px; background:var(--success); overflow:hidden;">
-                <div style="height:100%; width:<?php echo $row['pct']; ?>%; background:var(--warning); float:right;"></div>
+            <div style="flex:2 1 280px; min-width:220px;">
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:5px;">
+                    <span style="color:var(--success);">Worked <strong><?php echo htmlspecialchars(formatWorkDuration($p['worked'])); ?></strong></span>
+                    <span style="color:var(--warning);">Idle <strong><?php echo htmlspecialchars(formatWorkDuration($p['idle'])); ?></strong></span>
+                </div>
+                <div style="height:14px; border-radius:7px; background:var(--warning); overflow:hidden; display:flex;">
+                    <div style="height:100%; width:<?php echo $p['apct']; ?>%; background:var(--success);"></div>
+                </div>
+            </div>
+            <div style="flex:0 0 70px; text-align:right;">
+                <div style="font-size:1.4rem; font-weight:700; color:<?php echo $p['apct'] >= 60 ? 'var(--success)' : 'var(--warning)'; ?>;"><?php echo $p['apct']; ?>%</div>
+                <div style="font-size:0.68rem; color:var(--text-muted);">active</div>
             </div>
         </div>
-    <?php } ?>
+    <?php }
+    } ?>
 </div>
-<?php } ?>
 
 <!-- SCREENSHOTS -->
 <div class="card" id="shots">

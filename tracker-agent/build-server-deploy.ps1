@@ -27,6 +27,7 @@ $files = @(
     'admin\tracker_delete.php',
     'admin\tracker_export.php',
     'admin\tracker_timeline.php',
+    'admin\tracker_live.php',
     'includes\tracker_schema.php',
     'downloads\.htaccess',
     'downloads\README.txt'

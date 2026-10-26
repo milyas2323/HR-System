@@ -2,7 +2,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, ipcMain,
-  powerMonitor, desktopCapturer, screen, nativeImage, shell,
+  powerMonitor, desktopCapturer, screen, nativeImage, shell, Notification,
 } = require('electron');
 const path = require('path');
 const os = require('os');
@@ -14,6 +14,7 @@ const api = require('./api');
 const SAMPLE_INTERVAL_MS = 5000;     // how often we read the OS idle clock
 const PING_FLUSH_MS = 15000;         // how often we try to flush queued minute samples
 const MAX_QUEUE = 1440;              // keep at most ~1 day of unsent minute samples
+const IDLE_WARN_SECONDS = 600;      // warn the employee after 10 min idle (during a shift)
 const DEVICE_LABEL = `${os.hostname()} (${os.platform()} ${os.arch()})`;
 
 // ---- Runtime state --------------------------------------------------------
@@ -34,7 +35,19 @@ const state = {
   activeSeconds: 0,
   idleSeconds: 0,
   maxIdle: 0,
+  idleWarned: false,
 };
+
+function showIdleWarning(mins) {
+  try {
+    if (Notification.isSupported()) {
+      new Notification({
+        title: '⚠️ You appear to be idle',
+        body: `No activity for ~${mins} min during your shift. Continued inactivity may cause deductions and lower your performance rating — please resume work.`,
+      }).show();
+    }
+  } catch (e) { /* notifications unavailable */ }
+}
 
 const pingQueue = [];
 let sampleTimer = null;
@@ -106,6 +119,13 @@ function sampleTick() {
     state.idleSeconds += secs;
   }
   if (idle > state.maxIdle) state.maxIdle = idle;
+
+  // Warn the employee after prolonged idle during an open shift (once per idle episode).
+  if (state.hasOpenShift && idle >= IDLE_WARN_SECONDS) {
+    if (!state.idleWarned) { state.idleWarned = true; showIdleWarning(Math.floor(idle / 60)); }
+  } else if (idle < 60) {
+    state.idleWarned = false;
+  }
 }
 
 async function flushQueue() {

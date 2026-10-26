@@ -11,6 +11,8 @@
  */
 
 const config = require('./config');
+const { app } = require('electron');
+const AGENT_VERSION = app.getVersion();
 
 function baseUrl() {
   return String(config.load().serverUrl || '').replace(/\/+$/, '');
@@ -28,14 +30,17 @@ async function request(file, { method = 'GET', body = null, auth = true, isForm 
 
   if (auth && token) {
     headers['Authorization'] = `Bearer ${token}`;
+    headers['X-Agent-Version'] = AGENT_VERSION;
 
-    // Fallback copy of the token for servers that drop the Authorization header.
+    // Fallback copies for servers that drop custom/Authorization headers.
     if (isForm && body instanceof FormData) {
       body.append('token', token);
+      body.append('agent_version', AGENT_VERSION);
     } else if (method.toUpperCase() === 'GET') {
-      url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+      url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token)
+          + '&agent_version=' + encodeURIComponent(AGENT_VERSION);
     } else {
-      outBody = Object.assign({}, body || {}, { token });
+      outBody = Object.assign({}, body || {}, { token, agent_version: AGENT_VERSION });
     }
   }
 
@@ -71,7 +76,7 @@ async function login(serverUrl, email, password, device) {
   const res = await fetch(`${url}/api/login.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, device }),
+    body: JSON.stringify({ email, password, device, agent_version: AGENT_VERSION }),
   });
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }

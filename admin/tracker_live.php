@@ -31,7 +31,8 @@ $sql = "
         (SELECT ta.is_idle FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_idle,
         (SELECT ta.max_idle_seconds FROM tracker_activity ta WHERE ta.employee_id = u.id ORDER BY ta.window_start DESC LIMIT 1) AS last_max_idle,
         (SELECT MAX(t.last_used_at) FROM api_tokens t WHERE t.user_id = u.id AND t.revoked = 0) AS agent_seen,
-        (SELECT t2.last_location FROM api_tokens t2 WHERE t2.user_id = u.id AND t2.revoked = 0 AND t2.last_location IS NOT NULL ORDER BY t2.last_used_at DESC LIMIT 1) AS last_location
+        (SELECT t2.last_location FROM api_tokens t2 WHERE t2.user_id = u.id AND t2.revoked = 0 AND t2.last_location IS NOT NULL ORDER BY t2.last_used_at DESC LIMIT 1) AS last_location,
+        (SELECT t3.agent_version FROM api_tokens t3 WHERE t3.user_id = u.id AND t3.revoked = 0 ORDER BY t3.last_used_at DESC LIMIT 1) AS agent_version
     FROM users u
     LEFT JOIN shifts s ON s.employee_id = u.id AND s.status = 'active'
     WHERE u.role = 'employee' " . ($empFilter > 0 ? " AND u.id = $empFilter " : '') . "
@@ -56,10 +57,15 @@ if ($res) {
             $locText = $r['last_location']; $locSrc = 'approx. by IP';
         } else { $locText = 'Locating…'; $locSrc = ''; }
 
+        $ver = trim((string) ($r['agent_version'] ?? ''));
+        $everSeen = !empty($r['agent_seen']);
         $rows[] = [
             'name' => $r['name'],
             'status' => $status,
             'shift_open' => $r['open_shift_id'] ? true : false,
+            'version' => $ver,
+            'installed' => $everSeen,
+            'outdated' => ($ver !== '' && $ver !== TRACKER_LATEST_AGENT_VERSION),
             'location' => $locText,
             'loc_src' => $locSrc,
             'seen' => !empty($r['agent_seen']) ? date('h:i A', strtotime($r['agent_seen'])) : 'never',
@@ -71,4 +77,4 @@ if ($res) {
     }
 }
 
-echo json_encode(['success' => true, 'rows' => $rows, 'now' => date('h:i:s A')]);
+echo json_encode(['success' => true, 'rows' => $rows, 'now' => date('h:i:s A'), 'latest' => TRACKER_LATEST_AGENT_VERSION]);

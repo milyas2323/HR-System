@@ -1,7 +1,7 @@
 {
   "name": "workforce-hub-tracker",
   "productName": "Workforce Hub Tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Desktop activity tracker agent for the Workforce Hub HR system (Windows).",
   "main": "src/main.js",
   "author": "Workforce Hub",

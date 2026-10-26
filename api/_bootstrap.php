@@ -126,6 +126,24 @@ function api_authenticate($conn) {
     $touch->execute();
     $touch->close();
 
+    // Record the agent's reported version (so admins can see who's up to date).
+    $ver = '';
+    if (!empty($_SERVER['HTTP_X_AGENT_VERSION'])) {
+        $ver = $_SERVER['HTTP_X_AGENT_VERSION'];
+    } elseif (!empty($_REQUEST['agent_version'])) {
+        $ver = $_REQUEST['agent_version'];
+    } else {
+        $in = api_input();
+        if (!empty($in['agent_version'])) { $ver = $in['agent_version']; }
+    }
+    $ver = substr(trim((string) $ver), 0, 20);
+    if ($ver !== '') {
+        $uv = $conn->prepare("UPDATE api_tokens SET agent_version = ? WHERE token = ?");
+        $uv->bind_param('ss', $ver, $token);
+        $uv->execute();
+        $uv->close();
+    }
+
     // Refresh the agent's current location (throttled internally to ~30 min / IP change).
     updateAgentLocation($conn, $token, api_client_ip());
 

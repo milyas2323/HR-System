@@ -35,8 +35,9 @@ $userId = (int) $user['id'];
 $ip = api_client_ip();
 $device = substr($device, 0, 255);
 
-$ins = $conn->prepare("INSERT INTO api_tokens (user_id, token, device, ip_address, last_used_at) VALUES (?, ?, ?, ?, NOW())");
-$ins->bind_param('isss', $userId, $token, $device, $ip);
+$agentVersion = substr(trim((string) ($input['agent_version'] ?? '')), 0, 20);
+$ins = $conn->prepare("INSERT INTO api_tokens (user_id, token, device, ip_address, agent_version, last_used_at) VALUES (?, ?, ?, ?, ?, NOW())");
+$ins->bind_param('issss', $userId, $token, $device, $ip, $agentVersion);
 if (!$ins->execute()) {
     $ins->close();
     api_error('Could not create session. Please try again.', 500);

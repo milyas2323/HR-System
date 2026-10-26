@@ -16,6 +16,9 @@ if (!defined('TRACKER_SCREENSHOT_RETENTION_DAYS')) {
     define('TRACKER_SCREENSHOT_RETENTION_DAYS', 5);
 }
 
+/** The current agent build. Installs reporting an older version are flagged "update needed". */
+if (!defined('TRACKER_LATEST_AGENT_VERSION')) { define('TRACKER_LATEST_AGENT_VERSION', '1.1.0'); }
+
 /** Idle-alert penalty policy: N free alerts per shift, then a flat fine per extra alert. */
 if (!defined('IDLE_ALERTS_FREE_PER_SHIFT')) { define('IDLE_ALERTS_FREE_PER_SHIFT', 5); }
 if (!defined('IDLE_ALERT_PENALTY_RATE'))    { define('IDLE_ALERT_PENALTY_RATE', 100); }
@@ -187,6 +190,12 @@ if (!function_exists('ensureTrackerSchema')) {
                 ADD COLUMN last_lng VARCHAR(32) DEFAULT NULL,
                 ADD COLUMN located_ip VARCHAR(45) DEFAULT NULL,
                 ADD COLUMN located_at DATETIME DEFAULT NULL");
+        }
+
+        // 4b. Agent version column on api_tokens (which build each install is running).
+        $cv = $conn->query("SHOW COLUMNS FROM api_tokens LIKE 'agent_version'");
+        if ($cv && $cv->num_rows == 0) {
+            $conn->query("ALTER TABLE api_tokens ADD COLUMN agent_version VARCHAR(20) DEFAULT NULL");
         }
 
         // 5. Idle alerts: one row each time the agent warns an employee for being idle.

@@ -290,6 +290,13 @@ function trkRangeLabel($from, $to) {
         h += '<div>Shift: ' + (r.shift_open ? '🟢 open' : '— none') + '</div>';
         h += '<div>📍 ' + esc(r.location) + (r.loc_src ? ' <span style="font-size:0.68rem; opacity:0.7;">(' + r.loc_src + ')</span>' : '') + '</div>';
         h += '<div>Agent last seen: ' + esc(r.seen) + '</div>';
+        if (!r.installed) {
+            h += '<div style="color:var(--danger);">⚠️ Agent not installed</div>';
+        } else if (r.version) {
+            h += '<div>Agent v' + esc(r.version) + (r.outdated
+                ? ' <span class="badge danger" style="font-size:0.6rem;">UPDATE NEEDED</span>'
+                : ' <span class="badge success" style="font-size:0.6rem;">up to date</span>') + '</div>';
+        }
         if (r.idle_label) { h += '<div>Idle for ~' + esc(r.idle_label) + '</div>'; }
         h += '</div></div>';
         return h;

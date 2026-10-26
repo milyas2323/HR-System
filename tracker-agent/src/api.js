@@ -90,6 +90,10 @@ function sendPing(sample) {
   return request('ping.php', { method: 'POST', body: sample });
 }
 
+function sendIdleAlert(idleSeconds) {
+  return request('idle_alert.php', { method: 'POST', body: { idle_seconds: idleSeconds } });
+}
+
 async function sendScreenshot({ buffer, device, idleSeconds, isIdle, capturedAt }) {
   const form = new FormData();
   form.append('screenshot', new Blob([buffer], { type: 'image/jpeg' }), 'screen.jpg');
@@ -100,4 +104,4 @@ async function sendScreenshot({ buffer, device, idleSeconds, isIdle, capturedAt 
   return request('screenshot.php', { method: 'POST', body: form, isForm: true });
 }
 
-module.exports = { login, getShift, sendPing, sendScreenshot, baseUrl };
+module.exports = { login, getShift, sendPing, sendIdleAlert, sendScreenshot, baseUrl };

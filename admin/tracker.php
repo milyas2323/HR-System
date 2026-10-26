@@ -70,6 +70,7 @@ $empFilter = (int) ($_GET['t_emp'] ?? 0);
 $empClauseActivity = $empFilter > 0 ? " AND ta.employee_id = $empFilter " : '';
 $empClauseShift    = $empFilter > 0 ? " AND s.employee_id = $empFilter " : '';
 $empClauseShot     = $empFilter > 0 ? " AND ts.employee_id = $empFilter " : '';
+$empClauseAlert    = $empFilter > 0 ? " AND employee_id = $empFilter " : '';
 
 $isSingleToday = ($from === $todayWork && $to === $todayWork);
 $rangeIncludesToday = ($to >= $todayWork);
@@ -107,7 +108,26 @@ if (!empty($shiftIds)) {
     if ($res) { while ($r = $res->fetch_assoc()) { $shiftActivity[(int) $r['shift_id']] = $r; } }
     $res = $conn->query("SELECT shift_id, COUNT(*) c FROM tracker_screenshots WHERE shift_id IN ($idList) GROUP BY shift_id");
     if ($res) { while ($r = $res->fetch_assoc()) { $shiftShots[(int) $r['shift_id']] = (int) $r['c']; } }
+    $res = $conn->query("SELECT shift_id, COUNT(*) c FROM tracker_idle_alerts WHERE shift_id IN ($idList) GROUP BY shift_id");
+    if ($res) { while ($r = $res->fetch_assoc()) { $shiftAlerts[(int) $r['shift_id']] = (int) $r['c']; } }
 }
+$shiftAlerts = $shiftAlerts ?? [];
+
+// Idle-alert counts per employee over the range (work-day grouped).
+$empAlerts = [];
+$res = $conn->query("SELECT employee_id, COUNT(*) c FROM tracker_idle_alerts WHERE DATE(created_at - $WD_SHIFT) BETWEEN '$fromSql' AND '$toSql' $empClauseAlert GROUP BY employee_id");
+if ($res) { while ($r = $res->fetch_assoc()) { $empAlerts[(int) $r['employee_id']] = (int) $r['c']; } }
+$totalAlerts = array_sum($empAlerts);
+
+// Keep idle-alert fines in sync for the shifts in view (5 free per shift, then PKR 100 each).
+foreach ($shiftAlerts as $sid => $cnt) {
+    if ($cnt > IDLE_ALERTS_FREE_PER_SHIFT) { syncIdleAlertPenalty($conn, (int) $sid); }
+}
+// Idle-alert fine totals from the penalties table (respects admin waivers).
+$empIdlePenalty = [];
+$res = $conn->query("SELECT employee_id, SUM(amount) t FROM penalties WHERE reason LIKE 'Idle Alert Deduction%' AND waived = 0 AND DATE(created_at - $WD_SHIFT) BETWEEN '$fromSql' AND '$toSql' $empClauseAlert GROUP BY employee_id");
+if ($res) { while ($r = $res->fetch_assoc()) { $empIdlePenalty[(int) $r['employee_id']] = (float) $r['t']; } }
+$totalIdlePenalty = array_sum($empIdlePenalty);
 
 // ---- Per-employee summary over the range (work-day grouped) ----
 $summary = [];
@@ -237,6 +257,11 @@ function trkRangeLabel($from, $to) {
         <h4>Total Idle</h4>
         <h2 style="color:var(--warning);"><?php echo htmlspecialchars(formatWorkDuration($totIdle)); ?></h2>
     </div>
+    <div class="card stat-box" style="border-bottom:4px solid var(--danger);">
+        <h4>Idle Alerts <span style="font-weight:normal; color:var(--text-muted); font-size:0.7rem;">(10+ min)</span></h4>
+        <h2 style="color:var(--danger);"><?php echo (int) $totalAlerts; ?></h2>
+        <p style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">PKR <?php echo number_format($totalIdlePenalty); ?> deducted</p>
+    </div>
 </div>
 
 <?php if ($rangeIncludesToday) { ?>
@@ -293,6 +318,7 @@ function trkRangeLabel($from, $to) {
     </div>
     <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:16px;">
         One row per shift. Hours are counted against the actual <strong>clock-in → clock-out</strong>, so a shift that runs past midnight is a single accurate entry.
+        <br><strong>Idle-alert policy:</strong> first <?php echo (int) IDLE_ALERTS_FREE_PER_SHIFT; ?> idle alerts per shift are free; each extra alert is a <strong>PKR <?php echo number_format(IDLE_ALERT_PENALTY_RATE); ?></strong> deduction (auto-added to the employee's fines; waivable in Reports).
     </p>
     <div class="table-box">
         <table>
@@ -305,11 +331,12 @@ function trkRangeLabel($from, $to) {
                 <th>Dedicated Active</th>
                 <th>Idle</th>
                 <th>Idle %</th>
+                <th>Alerts</th>
                 <th>Shots</th>
                 <th>Timeline</th>
             </tr>
             <?php if (empty($shiftRows)) { ?>
-                <tr><td colspan="10" style="text-align:center; color:var(--text-muted); padding:30px;">No shifts in this range.</td></tr>
+                <tr><td colspan="11" style="text-align:center; color:var(--text-muted); padding:30px;">No shifts in this range.</td></tr>
             <?php } else {
                 foreach ($shiftRows as $s) {
                     $sid = (int) $s['id'];
@@ -333,6 +360,15 @@ function trkRangeLabel($from, $to) {
                     <td style="color:var(--success); font-weight:700;"><?php echo htmlspecialchars(formatWorkDuration($act)); ?></td>
                     <td style="color:var(--warning);"><?php echo htmlspecialchars(formatWorkDuration($idl)); ?></td>
                     <td style="font-size:0.85rem; color:<?php echo trkIdlePct($act,$idl) >= 40 ? 'var(--danger)' : 'var(--text-muted)'; ?>;"><?php echo trkIdlePct($act, $idl); ?>%</td>
+                    <td>
+                        <?php
+                        $al = $shiftAlerts[$sid] ?? 0;
+                        $fine = max(0, $al - IDLE_ALERTS_FREE_PER_SHIFT) * IDLE_ALERT_PENALTY_RATE;
+                        if ($al > 0) { ?>
+                            <span style="color:var(--danger); font-weight:600;">⚠️ <?php echo $al; ?></span>
+                            <?php if ($fine > 0) { ?><div style="font-size:0.68rem; color:var(--danger);">PKR <?php echo number_format($fine); ?></div><?php } ?>
+                        <?php } else { ?><span style="color:var(--text-muted);">0</span><?php } ?>
+                    </td>
                     <td>
                         <?php if ($shotC > 0) { ?>
                             <a href="dashboard.php?page=tracker&amp;t_from=<?php echo urlencode($from); ?>&amp;t_to=<?php echo urlencode($to); ?>&amp;t_emp=<?php echo (int) $s['employee_id']; ?>#shots" style="color:var(--accent);"><?php echo $shotC; ?> 📷</a>
@@ -365,6 +401,8 @@ foreach ($summary as $eid => $s) {
         'name' => $s['name'], 'shifts' => (int) $s['shift_count'],
         'worked' => $worked, 'idle' => $idle, 'apct' => $apct,
         'stars' => $stars, 'label' => $label, 'rcolor' => $rcolor, 'hasData' => $hasData,
+        'alerts' => $empAlerts[$eid] ?? 0,
+        'penalty' => $empIdlePenalty[$eid] ?? 0,
     ];
 }
 usort($perf, function ($x, $y) {
@@ -391,7 +429,7 @@ usort($perf, function ($x, $y) {
                     <?php if ($i === 0 && $p['hasData'] && $p['stars'] >= 4) { ?><span class="badge success" style="font-size:0.6rem; margin-left:6px;">TOP</span><?php } ?>
                 </div>
                 <div style="color:<?php echo $p['rcolor']; ?>; font-size:0.9rem; letter-spacing:1px;">
-                    <?php echo trkStars($p['stars']); ?> <span style="font-size:0.72rem; color:var(--text-muted);"><?php echo htmlspecialchars($p['label']); ?> · <?php echo $p['shifts']; ?> shift<?php echo $p['shifts'] === 1 ? '' : 's'; ?></span>
+                    <?php echo trkStars($p['stars']); ?> <span style="font-size:0.72rem; color:var(--text-muted);"><?php echo htmlspecialchars($p['label']); ?> · <?php echo $p['shifts']; ?> shift<?php echo $p['shifts'] === 1 ? '' : 's'; ?><?php if ($p['alerts'] > 0) { ?> · <span style="color:var(--danger);">⚠️ <?php echo $p['alerts']; ?> idle alert<?php echo $p['alerts'] === 1 ? '' : 's'; ?><?php if ($p['penalty'] > 0) { ?> · PKR <?php echo number_format($p['penalty']); ?> fine<?php } ?></span><?php } ?></span>
                 </div>
             </div>
             <div style="flex:2 1 280px; min-width:220px;">

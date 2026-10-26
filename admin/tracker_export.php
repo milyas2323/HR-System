@@ -56,7 +56,7 @@ header('Content-Type: text/csv; charset=utf-8');
 header('Content-Disposition: attachment; filename="' . $fname . '"');
 
 $out = fopen('php://output', 'w');
-fputcsv($out, ['Employee', 'Work Night', 'Clock In', 'Clock Out', 'Status', 'Shift Span', 'Dedicated Active', 'Dedicated Hours (decimal)', 'Idle', 'Idle %', 'Screenshots']);
+fputcsv($out, ['Employee', 'Work Night', 'Clock In', 'Clock Out', 'Status', 'Shift Span', 'Dedicated Active', 'Dedicated Hours (decimal)', 'Idle', 'Idle %', 'Screenshots', 'Idle Alerts']);
 
 function trkDur($s) { $s = max(0, (int) $s); return intdiv($s, 3600) . 'h ' . intdiv($s % 3600, 60) . 'm'; }
 
@@ -68,10 +68,13 @@ foreach ($shiftRows as $s) {
     $span = $hasShiftSummary ? (int) getShiftWorkSummary($s, $dbNow)['worked_seconds'] : 0;
     $workNight = date('Y-m-d', strtotime($s['start_time'] . ' -' . TRK_WD_OFFSET . ' hours'));
 
-    // Screenshot count for this shift.
+    // Screenshot + alert counts for this shift.
     $sc = 0;
     $cr = $conn->query("SELECT COUNT(*) c FROM tracker_screenshots WHERE shift_id = $sid");
     if ($cr) { $sc = (int) $cr->fetch_assoc()['c']; }
+    $ac = 0;
+    $ar = $conn->query("SELECT COUNT(*) c FROM tracker_idle_alerts WHERE shift_id = $sid");
+    if ($ar) { $ac = (int) $ar->fetch_assoc()['c']; }
 
     fputcsv($out, [
         $s['name'],
@@ -85,6 +88,7 @@ foreach ($shiftRows as $s) {
         trkDur($i),
         $pct . '%',
         $sc,
+        $ac,
     ]);
 }
 fclose($out);

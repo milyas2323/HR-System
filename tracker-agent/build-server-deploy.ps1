@@ -4,12 +4,13 @@
 #
 #   powershell -ExecutionPolicy Bypass -File tracker-agent\build-server-deploy.ps1
 #
-# NOTE: This bundle contains only files the tracker fully owns, so extracting it on
-# live is always safe (it never overwrites shared core files). Two one-time edits are
-# NOT in here on purpose (they would clobber your live files if overwritten):
-#   - admin/dashboard.php  (added the "Activity Tracker" menu link + route)
-#   - employee/dashboard.php (added the "Download Tracker" card)
-# Those were pasted in once by hand and rarely change.
+# NOTE: This bundle includes includes/functions.php (it carries the "Idle Alert Fine"
+# label + other logic). Extracting it OVERWRITES live functions.php, so make a backup
+# of the live file first (cPanel: copy/rename it) before the first time you deploy this.
+# Deliberately NOT included (do not overwrite these on live):
+#   - includes/db.php           -> holds live DB credentials; overwriting breaks the site
+#   - admin/dashboard.php       -> one-time "Activity Tracker" menu link + route (already live)
+#   - employee/dashboard.php    -> one-time "Download Tracker" card (already live)
 
 $ErrorActionPreference = 'Stop'
 $root  = Split-Path -Parent $PSScriptRoot          # project root (…\hr-system)
@@ -23,12 +24,14 @@ $files = @(
     'api\shift.php',
     'api\ping.php',
     'api\screenshot.php',
+    'api\idle_alert.php',
     'admin\tracker.php',
     'admin\tracker_delete.php',
     'admin\tracker_export.php',
     'admin\tracker_timeline.php',
     'admin\tracker_live.php',
     'includes\tracker_schema.php',
+    'includes\functions.php',
     'downloads\.htaccess',
     'downloads\README.txt'
 )

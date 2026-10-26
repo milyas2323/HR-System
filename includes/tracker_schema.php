@@ -16,6 +16,67 @@ if (!defined('TRACKER_SCREENSHOT_RETENTION_DAYS')) {
     define('TRACKER_SCREENSHOT_RETENTION_DAYS', 5);
 }
 
+/** Idle-alert penalty policy: N free alerts per shift, then a flat fine per extra alert. */
+if (!defined('IDLE_ALERTS_FREE_PER_SHIFT')) { define('IDLE_ALERTS_FREE_PER_SHIFT', 5); }
+if (!defined('IDLE_ALERT_PENALTY_RATE'))    { define('IDLE_ALERT_PENALTY_RATE', 100); }
+
+/**
+ * Recompute the idle-alert fine for one shift and keep the penalties table in sync.
+ *
+ * Policy: the first IDLE_ALERTS_FREE_PER_SHIFT alerts in a shift are free; each alert
+ * beyond that is fined IDLE_ALERT_PENALTY_RATE. e.g. 10 alerts -> 5 chargeable -> 500.
+ *
+ * Idempotent: it removes its own previous (non-waived) row for the shift and reinserts
+ * the current amount, keeping users.total_deduction consistent (mirrors addPenalty).
+ * If an admin has WAIVED the shift's idle fine, it is left untouched (forgiven).
+ * The fine is attributed to the shift's start date so it lands in the right payroll month.
+ */
+if (!function_exists('syncIdleAlertPenalty')) {
+    function syncIdleAlertPenalty($conn, $shiftId) {
+        $shiftId = (int) $shiftId;
+        if ($shiftId <= 0) { return; }
+
+        $sres = $conn->query("SELECT id, employee_id, start_time FROM shifts WHERE id = $shiftId LIMIT 1");
+        $shift = $sres ? $sres->fetch_assoc() : null;
+        if (!$shift) { return; }
+        $empId = (int) $shift['employee_id'];
+
+        $cres = $conn->query("SELECT COUNT(*) c FROM tracker_idle_alerts WHERE shift_id = $shiftId");
+        $count = $cres ? (int) $cres->fetch_assoc()['c'] : 0;
+        $chargeable = max(0, $count - IDLE_ALERTS_FREE_PER_SHIFT);
+        $amount = $chargeable * IDLE_ALERT_PENALTY_RATE;
+
+        $prefix = "Idle Alert Deduction (shift #$shiftId)";
+        $prefixEsc = mysqli_real_escape_string($conn, $prefix);
+        $eres = $conn->query("SELECT id, amount, waived FROM penalties WHERE reason LIKE '$prefixEsc%'");
+        $rows = [];
+        if ($eres) { while ($r = $eres->fetch_assoc()) { $rows[] = $r; } }
+
+        // If any existing row for this shift was waived by an admin, leave everything as is.
+        foreach ($rows as $r) { if (!empty($r['waived'])) { return; } }
+
+        // Remove previous (non-waived) rows and roll back their deduction.
+        foreach ($rows as $r) {
+            $rid = (int) $r['id'];
+            $amt = (float) $r['amount'];
+            $conn->query("DELETE FROM penalties WHERE id = $rid");
+            $conn->query("UPDATE users SET total_deduction = GREATEST(total_deduction - $amt, 0) WHERE id = $empId");
+        }
+
+        if ($amount <= 0) { return; } // within the free allowance — no fine
+
+        $workDate = date('Y-m-d', strtotime($shift['start_time']));
+        $reason = "$prefix - $workDate: $chargeable alert(s) over " . IDLE_ALERTS_FREE_PER_SHIFT
+            . " free x PKR " . IDLE_ALERT_PENALTY_RATE;
+        $reasonEsc = mysqli_real_escape_string($conn, $reason);
+        $tsEsc = mysqli_real_escape_string($conn, date('Y-m-d H:i:s', strtotime($shift['start_time'])));
+
+        $conn->query("INSERT INTO penalties (employee_id, reason, amount, created_at)
+                      VALUES ($empId, '$reasonEsc', $amount, '$tsEsc')");
+        $conn->query("UPDATE users SET total_deduction = total_deduction + $amount WHERE id = $empId");
+    }
+}
+
 /**
  * Delete screenshot files + rows older than the retention window.
  * Keeps disk usage bounded so the gallery never has to load months of images.
@@ -127,6 +188,18 @@ if (!function_exists('ensureTrackerSchema')) {
                 ADD COLUMN located_ip VARCHAR(45) DEFAULT NULL,
                 ADD COLUMN located_at DATETIME DEFAULT NULL");
         }
+
+        // 5. Idle alerts: one row each time the agent warns an employee for being idle.
+        $conn->query("CREATE TABLE IF NOT EXISTS tracker_idle_alerts (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            employee_id INT NOT NULL,
+            shift_id INT DEFAULT NULL,
+            idle_seconds INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_alert_employee (employee_id),
+            KEY idx_alert_shift (shift_id),
+            KEY idx_alert_created (created_at)
+        )");
     }
 }
 

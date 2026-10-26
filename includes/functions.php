@@ -1811,6 +1811,17 @@ function classifyPenaltyType($reason) {
         ];
     }
 
+    if (strpos($reason, 'idle alert deduction') !== false) {
+        $idleFree = defined('IDLE_ALERTS_FREE_PER_SHIFT') ? IDLE_ALERTS_FREE_PER_SHIFT : 5;
+        $idleRate = defined('IDLE_ALERT_PENALTY_RATE') ? IDLE_ALERT_PENALTY_RATE : 100;
+        return [
+            'key' => 'idle_alert',
+            'label' => 'Idle Alert Fine',
+            'badge' => 'warning',
+            'description' => 'First ' . $idleFree . ' idle alerts per shift free, then PKR ' . number_format($idleRate) . ' each',
+        ];
+    }
+
     return [
         'key' => 'manual',
         'label' => 'Manual / Misconduct',

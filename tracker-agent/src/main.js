@@ -122,7 +122,11 @@ function sampleTick() {
 
   // Warn the employee after prolonged idle during an open shift (once per idle episode).
   if (state.hasOpenShift && idle >= IDLE_WARN_SECONDS) {
-    if (!state.idleWarned) { state.idleWarned = true; showIdleWarning(Math.floor(idle / 60)); }
+    if (!state.idleWarned) {
+      state.idleWarned = true;
+      showIdleWarning(Math.floor(idle / 60));
+      api.sendIdleAlert(idle).catch(function () {}); // record the alert for admin reporting
+    }
   } else if (idle < 60) {
     state.idleWarned = false;
   }

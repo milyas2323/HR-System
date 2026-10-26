@@ -15,6 +15,8 @@ const SAMPLE_INTERVAL_MS = 5000;     // how often we read the OS idle clock
 const PING_FLUSH_MS = 15000;         // how often we try to flush queued minute samples
 const MAX_QUEUE = 1440;              // keep at most ~1 day of unsent minute samples
 const IDLE_WARN_SECONDS = 600;      // warn the employee after 10 min idle (during a shift)
+const SCREENSHOT_MIN_MINUTES = 2;   // capture a screen at a random point every 2–4 minutes
+const SCREENSHOT_MAX_MINUTES = 4;
 const DEVICE_LABEL = `${os.hostname()} (${os.platform()} ${os.arch()})`;
 
 // ---- Runtime state --------------------------------------------------------
@@ -175,9 +177,8 @@ function scheduleScreenshot(first) {
   if (first) {
     delay = 60000; // first capture ~1 min after tracking starts, so it's verifiable quickly
   } else {
-    const cfg = config.load();
-    const min = Math.max(1, cfg.screenshotMinMinutes) * 60000;
-    const max = Math.max(min, cfg.screenshotMaxMinutes * 60000);
+    const min = SCREENSHOT_MIN_MINUTES * 60000;
+    const max = SCREENSHOT_MAX_MINUTES * 60000;
     delay = min + Math.random() * (max - min);
   }
   screenshotTimer = setTimeout(doScreenshot, delay);

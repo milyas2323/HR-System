@@ -65,7 +65,9 @@ if ($res) {
             'shift_open' => $r['open_shift_id'] ? true : false,
             'version' => $ver,
             'installed' => $everSeen,
-            'outdated' => ($ver !== '' && $ver !== TRACKER_LATEST_AGENT_VERSION),
+            // An installed agent that isn't on the latest version (including old builds
+            // that don't report a version at all) is flagged as needing an update.
+            'outdated' => ($everSeen && $ver !== TRACKER_LATEST_AGENT_VERSION),
             'location' => $locText,
             'loc_src' => $locSrc,
             'seen' => !empty($r['agent_seen']) ? date('h:i A', strtotime($r['agent_seen'])) : 'never',

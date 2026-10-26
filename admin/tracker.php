@@ -296,6 +296,8 @@ function trkRangeLabel($from, $to) {
             h += '<div>Agent v' + esc(r.version) + (r.outdated
                 ? ' <span class="badge danger" style="font-size:0.6rem;">UPDATE NEEDED</span>'
                 : ' <span class="badge success" style="font-size:0.6rem;">up to date</span>') + '</div>';
+        } else {
+            h += '<div>Agent: <span style="color:var(--danger);">old build</span> <span class="badge danger" style="font-size:0.6rem;">UPDATE NEEDED</span></div>';
         }
         if (r.idle_label) { h += '<div>Idle for ~' + esc(r.idle_label) + '</div>'; }
         h += '</div></div>';

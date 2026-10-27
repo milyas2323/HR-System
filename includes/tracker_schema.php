@@ -17,7 +17,7 @@ if (!defined('TRACKER_SCREENSHOT_RETENTION_DAYS')) {
 }
 
 /** The current agent build. Installs reporting an older version are flagged "update needed". */
-if (!defined('TRACKER_LATEST_AGENT_VERSION')) { define('TRACKER_LATEST_AGENT_VERSION', '1.3.0'); }
+if (!defined('TRACKER_LATEST_AGENT_VERSION')) { define('TRACKER_LATEST_AGENT_VERSION', '1.4.0'); }
 
 /** Idle-alert penalty policy: N free alerts per shift, then a flat fine per extra alert. */
 if (!defined('IDLE_ALERTS_FREE_PER_SHIFT')) { define('IDLE_ALERTS_FREE_PER_SHIFT', 5); }

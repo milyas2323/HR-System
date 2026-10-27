@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('tracker', {
   setPaused: (paused) => ipcRenderer.invoke('set-paused', paused),
   logout: () => ipcRenderer.invoke('logout'),
   openWeb: (url) => ipcRenderer.invoke('open-web', url),
+  closeIdleWarning: () => ipcRenderer.invoke('close-idle-warning'),
 });

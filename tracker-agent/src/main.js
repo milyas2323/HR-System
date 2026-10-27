@@ -2,7 +2,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, ipcMain,
-  powerMonitor, desktopCapturer, screen, nativeImage, shell, Notification,
+  powerMonitor, desktopCapturer, screen, nativeImage, shell,
 } = require('electron');
 const path = require('path');
 const os = require('os');
@@ -23,6 +23,7 @@ const DEVICE_LABEL = `${os.hostname()} (${os.platform()} ${os.arch()})`;
 let tray = null;
 let loginWindow = null;
 let statusWindow = null;
+let idleWindow = null;
 
 const state = {
   trackingSince: null,
@@ -40,15 +41,26 @@ const state = {
   idleWarned: false,
 };
 
-function showIdleWarning(mins) {
-  try {
-    if (Notification.isSupported()) {
-      new Notification({
-        title: '⚠️ You appear to be idle',
-        body: `No activity for ~${mins} min during your shift. Continued inactivity may cause deductions and lower your performance rating — please resume work.`,
-      }).show();
-    }
-  } catch (e) { /* notifications unavailable */ }
+// Sticky, always-on-top warning window. Stays until the employee closes it,
+// and pops over everything (even if nothing else is open).
+function showIdleWarning() {
+  if (idleWindow) {
+    if (idleWindow.isMinimized()) idleWindow.restore();
+    idleWindow.show();
+    idleWindow.focus();
+    return;
+  }
+  idleWindow = new BrowserWindow({
+    width: 480, height: 360,
+    resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+    alwaysOnTop: true, skipTaskbar: false, center: true,
+    title: 'Idle Warning', autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  idleWindow.setAlwaysOnTop(true, 'screen-saver'); // above fullscreen apps too
+  idleWindow.loadFile(path.join(__dirname, '..', 'renderer', 'idle-warning.html'));
+  idleWindow.on('closed', () => { idleWindow = null; });
+  idleWindow.once('ready-to-show', () => { idleWindow.show(); idleWindow.focus(); });
 }
 
 const pingQueue = [];
@@ -126,7 +138,7 @@ function sampleTick() {
   if (state.hasOpenShift && idle >= IDLE_WARN_SECONDS) {
     if (!state.idleWarned) {
       state.idleWarned = true;
-      showIdleWarning(Math.floor(idle / 60));
+      showIdleWarning();
       api.sendIdleAlert(idle).catch(function () {}); // record the alert for admin reporting
     }
   } else if (idle < 60) {
@@ -382,6 +394,7 @@ ipcMain.handle('get-status', () => {
 ipcMain.handle('set-paused', (_e, paused) => { config.save({ paused: !!paused }); updateTray(); return true; });
 ipcMain.handle('logout', () => { doLogout(); return true; });
 ipcMain.handle('open-web', (_e, url) => { shell.openExternal(url); return true; });
+ipcMain.handle('close-idle-warning', () => { if (idleWindow) idleWindow.close(); return true; });
 
 // ---- App lifecycle --------------------------------------------------------
 if (!app.requestSingleInstanceLock()) {

@@ -40,7 +40,7 @@ $files = @(
 # (Big file ~78MB. Delete downloads\WorkforceHubTracker-Setup.exe if you want a
 # lighter code-only zip.)
 $optional = @(
-    'downloads\WorkforceHubTracker-Setup.exe'
+    'downloads\WorkforceHubTracker.zip'
 )
 
 New-Item -ItemType Directory -Force -Path $stage | Out-Null

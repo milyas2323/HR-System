@@ -368,11 +368,11 @@ if ($hourlyShowAll) {
         <!-- DESKTOP TRACKER DOWNLOAD -->
         <div class="card" style="margin-bottom: 20px; border-left: 4px solid var(--accent);">
             <h2 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 12px;">🖥️ Desktop Time Tracker</h2>
-            <a href="../downloads/WorkforceHubTracker-Setup.exe" class="btn glowing-element" style="text-decoration: none;" download>
+            <a href="../downloads/WorkforceHubTracker.zip" class="btn glowing-element" style="text-decoration: none;" download>
                 ⬇️ Download Tracker (Windows)
             </a>
             <p style="color: var(--text-muted); font-size: 0.72rem; margin-top: 10px;">
-                If Windows shows a warning, click “More info → Run anyway”.
+                After downloading, <strong>right-click the .zip, Extract All</strong>, then run <strong>WorkforceHubTracker-Setup.exe</strong>. If Windows shows a warning on first run, click "More info, Run anyway".
             </p>
         </div>
 

@@ -37,7 +37,8 @@
     <div class="row"><span>Open shift</span><span id="shift">—</span></div>
     <div class="row"><span>Connection</span><span id="online">—</span></div>
     <div class="row"><span>Queued samples</span><span id="queued">0</span></div>
-    <div class="row" style="border-bottom:0;"><span>Tracking since</span><span id="since">—</span></div>
+    <div class="row"><span>Tracking since</span><span id="since">—</span></div>
+    <div class="row" style="border-bottom:0;"><span>App version</span><span id="appver">—</span></div>
   </div>
 
   <script>
@@ -54,6 +55,7 @@
       $('online').textContent = s.online ? 'Connected' : 'Offline';
       $('queued').textContent = s.queued;
       $('since').textContent = s.trackingSince || '—';
+      $('appver').textContent = s.appVersion ? ('v' + s.appVersion) : '—';
       const dot = $('dot');
       let c = '#34d399';
       if (!s.online) c = '#f87171';

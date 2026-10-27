@@ -146,6 +146,7 @@ async function flushQueue() {
       } catch (e) {
         state.online = false;
         state.lastError = e.message;
+        if (e.status === 401) { handleAuthLost(); return; }
       }
       updateTray();
     }
@@ -164,6 +165,7 @@ async function flushQueue() {
     } catch (e) {
       state.online = false;
       state.lastError = e.message;
+      if (e.status === 401) { handleAuthLost(); return; }
       break;
     }
   }
@@ -317,9 +319,16 @@ function doLogout() {
   stopEngine();
   config.clearSession();
   pingQueue.length = 0;
-  Object.assign(state, { trackingSince: null, hasOpenShift: false, todayActiveSeconds: 0 });
+  Object.assign(state, { trackingSince: null, hasOpenShift: false, todayActiveSeconds: 0, online: false });
   updateTray();
   openLoginWindow();
+}
+
+// The server rejected our token (account deleted/revoked/expired): drop the stale
+// session and bring back the login window instead of retrying forever.
+function handleAuthLost() {
+  if (!config.isLoggedIn()) return;
+  doLogout();
 }
 
 // ---- IPC ------------------------------------------------------------------
@@ -347,7 +356,7 @@ ipcMain.handle('login', async (_evt, { serverUrl, email, password }) => {
 
 ipcMain.handle('get-defaults', () => {
   const cfg = config.load();
-  return { serverUrl: cfg.serverUrl || config.DEFAULTS.serverUrl || '' };
+  return { serverUrl: cfg.serverUrl || config.DEFAULTS.serverUrl || '', appVersion: app.getVersion() };
 });
 
 ipcMain.handle('get-status', () => {
@@ -366,6 +375,7 @@ ipcMain.handle('get-status', () => {
     queued: pingQueue.length,
     activeMinutesToday: mins,
     trackingSince: state.trackingSince ? fmtLocal(state.trackingSince) : null,
+    appVersion: app.getVersion(),
   };
 });
 
@@ -385,6 +395,14 @@ if (!app.requestSingleInstanceLock()) {
     // Force auto-start at login on, always (employees can't disable it from the app).
     config.save({ openAtLogin: true });
     app.setLoginItemSettings({ openAtLogin: true });
+
+    // Force a fresh login after an install/update (the saved session belongs to an
+    // older build, or none at all) — avoids stale sessions from deleted accounts.
+    const currentVer = app.getVersion();
+    if (config.load().sessionVersion !== currentVer) {
+      config.clearSession();
+      config.save({ sessionVersion: currentVer });
+    }
 
     if (config.isLoggedIn()) {
       createTray();

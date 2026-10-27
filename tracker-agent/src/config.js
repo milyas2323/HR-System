@@ -19,6 +19,7 @@ const DEFAULTS = {
   screenshotMaxMinutes: 10,
   openAtLogin: true,
   paused: false,
+  sessionVersion: '',     // app version the saved session belongs to (forces re-login on update)
 };
 
 let cache = null;

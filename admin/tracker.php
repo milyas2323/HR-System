@@ -155,16 +155,7 @@ foreach ($summary as $s) {
     $totOnshift += (int) $s['onshift_active_sec'];
 }
 
-// ---- Screenshots (range + employee) ----
-$shots = $conn->query("
-    SELECT ts.*, u.name
-    FROM tracker_screenshots ts
-    JOIN users u ON u.id = ts.employee_id
-    WHERE DATE(ts.captured_at - $WD_SHIFT) BETWEEN '$fromSql' AND '$toSql'
-    $empClauseShot
-    ORDER BY ts.captured_at DESC
-    LIMIT 300
-");
+// Screenshots gallery is loaded via AJAX from tracker_shots.php (auto-refreshes).
 
 function trkLiveBadge($status) {
     switch ($status) {
@@ -466,34 +457,8 @@ usort($perf, function ($x, $y) {
         Kept for the last <strong><?php echo (int) TRACKER_SCREENSHOT_RETENTION_DAYS; ?> days</strong>; older ones are deleted automatically. Click any image to open; use ← → to browse.
     </p>
 
-    <div style="display:flex; flex-wrap:wrap; gap:14px;">
-        <?php if ($shots && $shots->num_rows > 0) {
-            while ($shot = $shots->fetch_assoc()) {
-                $url = '../' . ltrim($shot['file'], '/');
-        ?>
-            <div class="trk-card" style="width:220px; position:relative; border:1px solid #27324a; border-radius:10px; overflow:hidden; background:var(--card, #1e293b);">
-                <button type="button" class="trk-del" data-id="<?php echo (int) $shot['id']; ?>" title="Delete this screenshot"
-                        style="position:absolute; top:6px; right:6px; z-index:2; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:rgba(220,38,38,0.92); color:#fff; cursor:pointer; font-size:14px; line-height:28px; text-align:center;">🗑</button>
-                <img src="<?php echo htmlspecialchars($url); ?>" alt="screenshot"
-                     class="trk-shot"
-                     data-full="<?php echo htmlspecialchars($url); ?>"
-                     data-name="<?php echo htmlspecialchars($shot['name'], ENT_QUOTES); ?>"
-                     data-time="<?php echo date('d M Y, h:i:s A', strtotime($shot['captured_at'])); ?>"
-                     style="width:100%; height:130px; object-fit:cover; display:block; cursor:zoom-in;">
-                <div style="padding:8px 10px; font-size:0.78rem;">
-                    <div><strong><?php echo htmlspecialchars($shot['name']); ?></strong></div>
-                    <div style="color:var(--text-muted);"><?php echo date('d M, h:i:s A', strtotime($shot['captured_at'])); ?></div>
-                    <?php if ((int) $shot['is_idle'] === 1) { ?>
-                        <span class="badge warning" style="font-size:0.65rem;">Idle <?php echo htmlspecialchars(formatWorkDuration((int) $shot['idle_seconds'])); ?></span>
-                    <?php } else { ?>
-                        <span class="badge success" style="font-size:0.65rem;">Active</span>
-                    <?php } ?>
-                </div>
-            </div>
-        <?php }
-        } else { ?>
-            <p style="color:var(--text-muted);">No screenshots in this range<?php echo $empFilter ? ' for this employee' : ''; ?>.</p>
-        <?php } ?>
+    <div id="trkShotsGrid" style="display:flex; flex-wrap:wrap; gap:14px;">
+        <p style="color:var(--text-muted);">Loading…</p>
     </div>
 </div>
 
@@ -532,59 +497,91 @@ usort($perf, function ($x, $y) {
     var cap = document.getElementById('trkShotCaption');
     var prevBtn = document.getElementById('trkPrev');
     var nextBtn = document.getElementById('trkNext');
-    if (!modal) return;
+    var grid = document.getElementById('trkShotsGrid');
+    if (!modal || !grid) return;
 
-    var shots = [];   // current snapshot of gallery images
+    var FROM = '<?php echo htmlspecialchars($from, ENT_QUOTES); ?>';
+    var TO = '<?php echo htmlspecialchars($to, ENT_QUOTES); ?>';
+    var EMP = <?php echo (int) $empFilter; ?>;
+
+    var shots = [];
     var idx = -1;
 
-    function rebuild() {
-        shots = Array.prototype.slice.call(document.querySelectorAll('.trk-shot'));
+    function esc(s) { var d = document.createElement('div'); d.textContent = (s == null ? '' : s); return d.innerHTML; }
+    function rebuild() { shots = Array.prototype.slice.call(grid.querySelectorAll('.trk-shot')); }
+
+    function renderCard(s) {
+        var h = '<div class="trk-card" style="width:220px; position:relative; border:1px solid #27324a; border-radius:10px; overflow:hidden; background:var(--card, #1e293b);">';
+        h += '<button type="button" class="trk-del" data-id="' + s.id + '" title="Delete this screenshot" style="position:absolute; top:6px; right:6px; z-index:2; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:rgba(220,38,38,0.92); color:#fff; cursor:pointer; font-size:14px; line-height:28px; text-align:center;">🗑</button>';
+        h += '<img src="' + esc(s.url) + '" alt="screenshot" class="trk-shot" data-full="' + esc(s.url) + '" data-name="' + esc(s.name) + '" data-time="' + esc(s.fulltime) + '" style="width:100%; height:130px; object-fit:cover; display:block; cursor:zoom-in;">';
+        h += '<div style="padding:8px 10px; font-size:0.78rem;"><div><strong>' + esc(s.name) + '</strong></div><div style="color:var(--text-muted);">' + esc(s.time) + '</div>';
+        h += s.is_idle ? '<span class="badge warning" style="font-size:0.65rem;">Idle ' + esc(s.idle_label) + '</span>' : '<span class="badge success" style="font-size:0.65rem;">Active</span>';
+        h += '</div></div>';
+        return h;
     }
+
+    function loadShots() {
+        if (modal.classList.contains('open')) return; // don't disrupt while viewing
+        fetch('tracker_shots.php?t_from=' + encodeURIComponent(FROM) + '&t_to=' + encodeURIComponent(TO) + '&t_emp=' + EMP, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            if (!d || !d.success) return;
+            grid.innerHTML = d.rows.length
+                ? d.rows.map(renderCard).join('')
+                : '<p style="color:var(--text-muted);">No screenshots in this range' + (EMP ? ' for this employee' : '') + '.</p>';
+            rebuild();
+        })
+        .catch(function () {});
+    }
+
     function show(i) {
         if (i < 0 || i >= shots.length) return;
         idx = i;
         var el = shots[i];
         img.src = el.getAttribute('data-full');
-        cap.textContent = (el.getAttribute('data-name') || '') + '  ·  ' + (el.getAttribute('data-time') || '')
-            + '   (' + (i + 1) + ' / ' + shots.length + ')';
+        cap.textContent = (el.getAttribute('data-name') || '') + '  ·  ' + (el.getAttribute('data-time') || '') + '   (' + (i + 1) + ' / ' + shots.length + ')';
         prevBtn.disabled = (i <= 0);
         nextBtn.disabled = (i >= shots.length - 1);
     }
     function openAt(el) { rebuild(); show(shots.indexOf(el)); modal.classList.add('open'); }
-    function close() { modal.classList.remove('open'); img.src = ''; }
+    function closeModal() { modal.classList.remove('open'); img.src = ''; }
 
-    document.querySelectorAll('.trk-shot').forEach(function (el) {
-        el.addEventListener('click', function () { openAt(el); });
-    });
-    prevBtn.addEventListener('click', function (e) { e.stopPropagation(); show(idx - 1); });
-    nextBtn.addEventListener('click', function (e) { e.stopPropagation(); show(idx + 1); });
-    document.getElementById('trkShotClose').addEventListener('click', close);
-    modal.addEventListener('click', function (e) { if (e.target === modal || e.target.className === 'trk-stage') close(); });
-    document.addEventListener('keydown', function (e) {
-        if (!modal.classList.contains('open')) return;
-        if (e.key === 'Escape') close();
-        else if (e.key === 'ArrowLeft') show(idx - 1);
-        else if (e.key === 'ArrowRight') show(idx + 1);
-    });
-
-    // Inline delete (no reload).
-    document.querySelectorAll('.trk-del').forEach(function (btn) {
-        btn.addEventListener('click', function (e) {
+    // Delegated clicks on the (re-rendered) gallery: open lightbox or delete.
+    grid.addEventListener('click', function (e) {
+        var del = e.target.closest ? e.target.closest('.trk-del') : null;
+        if (del) {
             e.stopPropagation();
             if (!confirm('Delete this screenshot permanently?')) return;
-            var id = btn.getAttribute('data-id');
-            btn.disabled = true; btn.textContent = '…';
+            var id = del.getAttribute('data-id');
+            del.disabled = true; del.textContent = '…';
             fetch('tracker_delete.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'id=' + encodeURIComponent(id) })
             .then(function (r) { return r.json(); })
             .then(function (d) {
                 if (d && d.success) {
-                    var card = btn.closest('.trk-card');
+                    var card = del.closest('.trk-card');
                     if (card) { card.style.transition = 'opacity .2s'; card.style.opacity = '0'; setTimeout(function () { card.remove(); rebuild(); }, 200); }
-                } else { alert('Could not delete: ' + ((d && d.error) || 'error')); btn.disabled = false; btn.textContent = '🗑'; }
+                } else { alert('Could not delete: ' + ((d && d.error) || 'error')); del.disabled = false; del.textContent = '🗑'; }
             })
-            .catch(function () { alert('Network error while deleting.'); btn.disabled = false; btn.textContent = '🗑'; });
-        });
+            .catch(function () { alert('Network error while deleting.'); del.disabled = false; del.textContent = '🗑'; });
+            return;
+        }
+        var shot = e.target.closest ? e.target.closest('.trk-shot') : null;
+        if (shot) { openAt(shot); }
     });
+
+    prevBtn.addEventListener('click', function (e) { e.stopPropagation(); show(idx - 1); });
+    nextBtn.addEventListener('click', function (e) { e.stopPropagation(); show(idx + 1); });
+    document.getElementById('trkShotClose').addEventListener('click', closeModal);
+    modal.addEventListener('click', function (e) { if (e.target === modal || e.target.className === 'trk-stage') closeModal(); });
+    document.addEventListener('keydown', function (e) {
+        if (!modal.classList.contains('open')) return;
+        if (e.key === 'Escape') closeModal();
+        else if (e.key === 'ArrowLeft') show(idx - 1);
+        else if (e.key === 'ArrowRight') show(idx + 1);
+    });
+
+    loadShots();
+    setInterval(loadShots, 45000); // auto-refresh the gallery every 45s
 })();
 </script>
 

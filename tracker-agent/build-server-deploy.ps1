@@ -30,6 +30,8 @@ $files = @(
     'admin\tracker_export.php',
     'admin\tracker_timeline.php',
     'admin\tracker_live.php',
+    'admin\tracker_shots.php',
+    'admin\delete-employee.php',
     'includes\tracker_schema.php',
     'includes\functions.php',
     'downloads\.htaccess',

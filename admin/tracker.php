@@ -129,6 +129,18 @@ $res = $conn->query("SELECT employee_id, SUM(amount) t FROM penalties WHERE reas
 if ($res) { while ($r = $res->fetch_assoc()) { $empIdlePenalty[(int) $r['employee_id']] = (float) $r['t']; } }
 $totalIdlePenalty = array_sum($empIdlePenalty);
 
+// Agent install/version status for every employee (rollout checklist).
+$agentStatus = [];
+$asql = "SELECT u.id, u.name,
+        (SELECT t.agent_version FROM api_tokens t WHERE t.user_id = u.id AND t.revoked = 0 ORDER BY t.last_used_at DESC LIMIT 1) AS version,
+        (SELECT t3.device FROM api_tokens t3 WHERE t3.user_id = u.id AND t3.revoked = 0 ORDER BY t3.last_used_at DESC LIMIT 1) AS device,
+        (SELECT MAX(t2.last_used_at) FROM api_tokens t2 WHERE t2.user_id = u.id AND t2.revoked = 0) AS last_seen
+    FROM users u
+    WHERE u.role = 'employee' " . ($empFilter > 0 ? " AND u.id = $empFilter " : '') . "
+    ORDER BY u.name ASC";
+$res = $conn->query($asql);
+if ($res) { while ($r = $res->fetch_assoc()) { $agentStatus[] = $r; } }
+
 // ---- Per-employee summary over the range (work-day grouped) ----
 $summary = [];
 $res = $conn->query("
@@ -318,6 +330,45 @@ function trkRangeLabel($from, $to) {
 })();
 </script>
 <?php } ?>
+
+<!-- AGENT STATUS: who has the tracker installed, which version -->
+<div class="card">
+    <h2>Agent Status <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">— tracker install &amp; version per employee (latest: v<?php echo htmlspecialchars(TRACKER_LATEST_AGENT_VERSION); ?>)</span></h2>
+    <div class="table-box">
+        <table>
+            <tr>
+                <th>Employee</th>
+                <th>Status</th>
+                <th>Version</th>
+                <th>Computer</th>
+                <th>Last Connected</th>
+            </tr>
+            <?php if (empty($agentStatus)) { ?>
+                <tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:30px;">No employees.</td></tr>
+            <?php } else {
+                foreach ($agentStatus as $a) {
+                    $ver = trim((string) $a['version']);
+                    $seen = $a['last_seen'];
+                    if (empty($seen)) {
+                        $sLabel = 'Not installed'; $sColor = 'var(--danger)'; $verText = '—';
+                    } elseif ($ver === TRACKER_LATEST_AGENT_VERSION) {
+                        $sLabel = 'Up to date'; $sColor = 'var(--success)'; $verText = 'v' . $ver;
+                    } else {
+                        $sLabel = 'Update needed'; $sColor = 'var(--danger)'; $verText = ($ver !== '' ? 'v' . $ver : 'old build');
+                    }
+            ?>
+                <tr>
+                    <td><strong><?php echo htmlspecialchars($a['name']); ?></strong></td>
+                    <td><span class="badge" style="background:<?php echo $sColor; ?>; color:#fff;"><?php echo $sLabel; ?></span></td>
+                    <td style="font-weight:600;"><?php echo htmlspecialchars($verText); ?></td>
+                    <td style="font-size:0.78rem; color:var(--text-muted); max-width:220px;"><?php echo htmlspecialchars($a['device'] ? $a['device'] : '—'); ?></td>
+                    <td style="font-size:0.82rem;"><?php echo $seen ? date('d M Y, h:i A', strtotime($seen)) : '<span style="color:var(--text-muted);">never</span>'; ?></td>
+                </tr>
+            <?php }
+            } ?>
+        </table>
+    </div>
+</div>
 
 <!-- SHIFT REPORT (accurate clock-in → clock-out, cross-midnight safe) -->
 <div class="card">

@@ -148,7 +148,7 @@ $leaveMsg = $conn->query("
 
 /* HOURLY UPDATE WARNING (15-minute slot windows) */
 $warningMsg = "";
-if($active){
+if($active && !hourlyUpdatesRelaxedForShift($active['start_time'])){
     $dbNowTs = getDatabaseNowTimestamp($conn);
     $slots = getHourlySlotDefinitionsForShift($active['start_time']);
     $shiftId = (int) $active['id'];
@@ -337,9 +337,6 @@ if ($hourlyShowAll) {
         </a>
         <a href="dashboard.php?page=start-shift" class="<?php echo ($page == 'start-shift') ? 'active-page' : ''; ?>">
             <span>⏰</span> Start Shift
-        </a>
-        <a href="dashboard.php?page=hourly-update" class="<?php echo ($page == 'hourly-update') ? 'active-page' : ''; ?>">
-            <span>📝</span> Hourly Update
         </a>
         <a href="dashboard.php?page=end-report" class="<?php echo ($page == 'end-report') ? 'active-page' : ''; ?>">
             <span>🏁</span> End Shift Report
@@ -921,7 +918,6 @@ if ($hourlyShowAll) {
 
     <?php } else { 
         if($page == 'start-shift') include "checkin.php";
-        elseif($page == 'hourly-update') include "hourly-update.php";
         elseif($page == 'end-report') include "end-report.php";
         elseif($page == 'leave-request') include "leave-request.php";
         elseif($page == 'add-request') include "add-request.php";

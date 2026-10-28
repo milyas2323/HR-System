@@ -116,6 +116,11 @@ function processEmployeeHourlyUpdateSubmission($conn, $employeeId, $updateText, 
         return $result;
     }
 
+    if (hourlyUpdatesRelaxedForShift($activeShift['start_time'])) {
+        $result['message'] = 'Hourly updates are no longer required — the Activity Tracker now records your working hours automatically.';
+        return $result;
+    }
+
     $dbNowTs = getDatabaseNowTimestamp($conn);
     $slots = getHourlySlotDefinitionsForShift($activeShift['start_time']);
     $slot = findHourlySlotForTimestamp($slots, $dbNowTs);
@@ -675,6 +680,29 @@ define('HOURLY_SLOT_WINDOW_MINUTES', 15);
 
 /** New submissions from this datetime onward must be inside :00–:15 windows (PKT). */
 define('HOURLY_SLOT_STRICT_START', '2026-06-05 00:00:00');
+
+/**
+ * Hourly task updates are retired for shifts starting on/after this work-date
+ * (the desktop Activity Tracker now proves presence). Shifts on/after this date
+ * are never counted as missing hourly slots and are never fined for them; every
+ * earlier shift is unaffected, so existing/historical fines stay exactly as charged.
+ * The end-of-day report requirement is intentionally left unchanged.
+ * Set to '' (empty) to re-enable hourly updates for all shifts.
+ */
+define('HOURLY_UPDATES_RETIRED_FROM', '2026-10-28');
+
+/** Whether hourly updates are retired (no longer required/fined) for a given shift. */
+function hourlyUpdatesRelaxedForShift($shiftStartDatetime) {
+    if (!defined('HOURLY_UPDATES_RETIRED_FROM') || HOURLY_UPDATES_RETIRED_FROM === '') {
+        return false;
+    }
+    try {
+        $start = new DateTime($shiftStartDatetime, new DateTimeZone('Asia/Karachi'));
+    } catch (Exception $e) {
+        return false;
+    }
+    return $start->format('Y-m-d') >= HOURLY_UPDATES_RETIRED_FROM;
+}
 
 /**
  * Build the 7 fifteen-minute submission windows for a shift day.
@@ -1315,7 +1343,8 @@ function getMissedUpdatesBreakdownForShift($conn, $employeeId, $shiftRow, $audit
     $shiftId = (int) $shiftRow['id'];
     $startTime = $shiftRow['start_time'];
 
-    $slots = getHourlySlotDefinitionsForShift($startTime);
+    $hourlyRetired = hourlyUpdatesRelaxedForShift($startTime);
+    $slots = $hourlyRetired ? [] : getHourlySlotDefinitionsForShift($startTime);
     $missedHourly = [];
 
     $requiredEnded = 0;
@@ -1338,8 +1367,8 @@ function getMissedUpdatesBreakdownForShift($conn, $employeeId, $shiftRow, $audit
         $summaryMissed = !($er && $er->num_rows > 0);
     }
 
-    $filledHourly = countFilledHourlySlotsForShift($conn, $employeeId, $shiftId, $slots, $startTime, $auditTimestamp);
-    $applicableSlots = getApplicableHourlySlotsForShift($startTime, $auditTimestamp);
+    $filledHourly = $hourlyRetired ? 0 : countFilledHourlySlotsForShift($conn, $employeeId, $shiftId, $slots, $startTime, $auditTimestamp);
+    $applicableSlots = $hourlyRetired ? [] : getApplicableHourlySlotsForShift($startTime, $auditTimestamp);
 
     return [
         'hourly' => $missedHourly,

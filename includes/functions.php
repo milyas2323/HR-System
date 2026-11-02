@@ -526,7 +526,7 @@ function processAdminLeaveRequestAction($conn, $requestId, $action) {
 /**
  * Process admin misconduct penalty form.
  */
-function processAdminMisconductPenalty($conn, $employeeId, $reason, $amount) {
+function processAdminMisconductPenalty($conn, $employeeId, $reason, $amount, $incidentDate = null) {
     $employeeId = (int) $employeeId;
     $reason = trim((string) $reason);
     $amount = floatval($amount);
@@ -535,28 +535,56 @@ function processAdminMisconductPenalty($conn, $employeeId, $reason, $amount) {
         return ['success' => false, 'message' => 'Please verify all form inputs.'];
     }
 
-    addPenalty($conn, $employeeId, $reason, $amount);
+    $createdAt = null;
+    $incidentDate = trim((string) $incidentDate);
+    if ($incidentDate !== '') {
+        $d = DateTime::createFromFormat('Y-m-d', $incidentDate);
+        if (!$d || $d->format('Y-m-d') !== $incidentDate) {
+            return ['success' => false, 'message' => 'Invalid incident date. Use the date picker.'];
+        }
+        if ($d->format('Y-m-d') > date('Y-m-d')) {
+            return ['success' => false, 'message' => 'Incident date cannot be in the future.'];
+        }
+        $createdAt = $d->format('Y-m-d');
+    }
 
+    addPenalty($conn, $employeeId, $reason, $amount, $createdAt);
+
+    $monthLabel = date('F Y', strtotime(($createdAt ?: date('Y-m-d'))));
     return [
         'success' => true,
-        'message' => 'Misconduct penalty of PKR ' . number_format($amount) . ' applied successfully!',
+        'message' => 'Misconduct penalty of PKR ' . number_format($amount) . ' applied — counted in ' . $monthLabel . '.',
     ];
 }
 
 /**
  * Log a penalty and deduct salary
  */
-function addPenalty($conn, $employee_id, $reason, $amount){
+function addPenalty($conn, $employee_id, $reason, $amount, $createdAt = null){
     $employee_id = intval($employee_id);
     $amount = floatval($amount);
     $reason = mysqli_real_escape_string($conn, $reason);
 
-    $conn->query("INSERT INTO penalties (employee_id, reason, amount, created_at)
-                  VALUES ('$employee_id', '$reason', '$amount', NOW())");
+    $createdAtSql = 'NOW()';
+    $countsThisMonth = true;
+    if ($createdAt !== null && $createdAt !== '') {
+        $dateOnly = substr(trim((string) $createdAt), 0, 10);
+        $d = DateTime::createFromFormat('Y-m-d', $dateOnly);
+        if ($d && $d->format('Y-m-d') === $dateOnly) {
+            $stamp = $d->format('Y-m-d') . ' ' . date('H:i:s');
+            $createdAtSql = "'" . mysqli_real_escape_string($conn, $stamp) . "'";
+            $countsThisMonth = ($d->format('Y-m') === date('Y-m'));
+        }
+    }
 
-    $conn->query("UPDATE users
-                  SET total_deduction = total_deduction + $amount
-                  WHERE id='$employee_id'");
+    $conn->query("INSERT INTO penalties (employee_id, reason, amount, created_at)
+                  VALUES ('$employee_id', '$reason', '$amount', $createdAtSql)");
+
+    if ($countsThisMonth) {
+        $conn->query("UPDATE users
+                      SET total_deduction = total_deduction + $amount
+                      WHERE id='$employee_id'");
+    }
 }
 
 /**

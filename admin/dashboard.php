@@ -326,7 +326,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'misconduct-penalty' && i
         $conn,
         (int) ($_POST['employee_id'] ?? 0),
         $_POST['reason'] ?? '',
-        $_POST['amount'] ?? 0
+        $_POST['amount'] ?? 0,
+        $_POST['incident_date'] ?? ''
     );
     $_SESSION['msg'] = $penaltyResult['message'];
     header('Location: dashboard.php?page=misconduct-penalty');

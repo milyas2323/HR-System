@@ -38,6 +38,14 @@ if($_SESSION['user']['role'] != 'admin'){
             <textarea name="reason" placeholder="Describe the incident (e.g. Falsifying check-in coordinates)..." required style="min-height: 100px;"></textarea>
         </div>
 
+        <div class="form-group">
+            <label>Incident Date <span style="color: var(--text-muted); font-weight: 400;">(sets which month's salary slip &amp; report this fine lands in)</span></label>
+            <input type="date" name="incident_date" value="<?php echo date('Y-m-d'); ?>" max="<?php echo date('Y-m-d'); ?>" required>
+            <p style="color: var(--text-muted); font-size: 0.8rem; margin: 8px 0 0 0;">
+                Pick a past date to back-date the fine — it will be adjusted in that month's salary slip and employee report, not the current month.
+            </p>
+        </div>
+
         <div class="form-group" style="margin-bottom: 25px;">
             <label>Penalty Fine Amount (PKR)</label>
             <input type="number" name="amount" value="10000" min="0" required>
